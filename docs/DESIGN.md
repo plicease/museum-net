@@ -127,18 +127,27 @@ Nix installation/build workflow must be explicit and documented; `flake.lock` pi
 
 ### Vintage client emulation
 
-The lab exercises real period-appropriate clients through 86Box, as well as modern Linux tools.
+The lab exercises real period-appropriate clients as well as modern Linux tools. DOS and Windows 3.11 under 86Box are the initial clients, not the permanent set: Macintosh, Unix, CP/M, Apple II, and other systems are expected later.
 
 | Environment | Machine configuration | Purpose |
 |---|---|---|
 | MS-DOS | `dev/machines/dos/` | Primary serial-protocol target: Interloper bootstrap, Sprocket, SLIP/PPP, and subsequent FTP/HTTP access |
 | Windows for Workgroups 3.11 | `dev/machines/win311/` | Additional compatibility target: emulated Ethernet and serial networking, WinSock/TCP/IP applications, historical FTP clients, and early HTTP browsers such as Mosaic and Netscape. Reflects the physical IBM PS/2 Model 70 running DOS 6.22 and Windows 3.11 |
 
-Git tracks 86Box machine configuration only. ROMs, Windows and MS-DOS installation media, licensed software, and installed disk images are never committed; users supply them locally.
+Git tracks emulator machine configuration only. ROMs, operating-system installation media, licensed software, and installed disk images are never committed; users supply them locally.
 
-Both environments are optional for the basic gateway development workflow and ordinary CI. Lightweight Linux clients carry the mandatory automated service and isolation tests; 86Box covers historical compatibility through manual or opt-in integration tests. Windows testing stays manual until a repeatable guest-side test harness exists.
+All emulated clients are optional for the basic gateway development workflow and ordinary CI. Lightweight Linux clients carry the mandatory automated service and isolation tests; emulated clients cover historical compatibility through manual or opt-in integration tests. Windows testing stays manual until a repeatable guest-side test harness exists.
 
 Machine configurations attach only to the lab's dedicated isolated museum Ethernet network and virtual serial bridges, never to existing host bridges.
+
+The client-launch and connectivity layer must not assume 86Box, x86 hardware, DOS or Windows, or a particular guest network stack:
+
+- **Client descriptor:** each client is described by its emulator/launcher, user-supplied assets (ROMs, OS images), network attachment (isolated museum Ethernet, SLIP, PPP), serial transport (PTY/TCP bridge), and supported test capabilities (FTP, HTTP, Sprocket, Interloper, and so on).
+- **Common emulator interface:** emulator-specific launch and configuration logic sits behind a common interface. Network and serial infrastructure is reusable by 86Box, QEMU, Mini vMac/Basilisk II, MAME, and future emulators where their capabilities permit.
+- **Emulator and guest are separate:** one emulator can host several guests, and one guest may be supported through more than one emulator.
+- **No hard-coded clients:** shared orchestration discovers clients from their descriptors rather than naming `dos` or `win311`. Paths may later be grouped by platform, such as `dev/machines/pc/dos/` and `dev/machines/mac/system6/`.
+
+New clients are added incrementally, and stay out of the mandatory bootstrap and CI paths.
 
 ### Local state
 
