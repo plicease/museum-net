@@ -42,13 +42,13 @@ packages:
       why: Owns the lab VM and network definitions
     - name: libvirt-clients
       why: Provides virsh
-    - name: virtinst
-      why: Provides virt-install and virt-xml for generating definitions
     - name: nix-bin
       why: Builds the pinned NixOS configurations without a downloaded installer
     - name: nix-setup-systemd
       why: Runs nix-daemon so unprivileged users can build
   optional:
+    - name: virtinst
+      why: Provides virt-xml for inspecting and editing lab definitions by hand
     - name: virt-manager
       why: Graphical console and inspection for lab VMs
     - name: tcpdump

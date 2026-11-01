@@ -9,5 +9,10 @@
 # museum_a = "198.18.20.0/24"
 # vpn = "198.18.30.0/24"
 
+# If [subnets] is left out, up allocates free /24s and keeps them stable.
+
 # [paths]
 # roms = "/path/to/86box/roms"
+
+# [machines.dev-gateway]
+# memory_mib = 2048

@@ -1,0 +1,27 @@
+# The virtual lab. Shared orchestration reads this file and never names a
+# specific machine or network. `host` is the address offset within the subnet.
+version: 1
+
+networks:
+  upstream:
+    bridge: mnd-upstream
+  museum_a:
+    bridge: mnd-museum-a
+  museum_b:
+    bridge: mnd-museum-b
+
+machines:
+  dev-gateway:
+    vcpus: 2
+    memory_mib: 1024
+    disk_gib: 4
+    interfaces:
+      - { name: mgmt0, network: upstream, host: 2 }
+      - { name: museum0, network: museum_a, host: 1 }
+      - { name: museum1, network: museum_b, host: 1 }
+  dev-client:
+    vcpus: 1
+    memory_mib: 512
+    disk_gib: 2
+    interfaces:
+      - { name: eth0, network: museum_a, host: 10 }

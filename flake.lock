@@ -1,5 +1,17 @@
 {
   "nodes": {
+    "lab": {
+      "flake": false,
+      "locked": {
+        "path": "./dev/lab-example",
+        "type": "path"
+      },
+      "original": {
+        "path": "./dev/lab-example",
+        "type": "path"
+      },
+      "parent": []
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1793410479,
@@ -18,6 +30,7 @@
     },
     "root": {
       "inputs": {
+        "lab": "lab",
         "nixpkgs": "nixpkgs"
       }
     }

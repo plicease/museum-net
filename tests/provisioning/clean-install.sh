@@ -86,6 +86,6 @@ as_tester '"$HOME"/.local/share/museum-net/tools/86box/*/86Box.AppImage --appima
 
 echo '== unit tests and lint'
 as_tester 'PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=dev/lib python3 -m unittest discover -s tests/provisioning 2>&1'
-as_tester 'shellcheck -x dev/scripts/doctor dev/scripts/bootstrap dev/lib/python.sh tests/provisioning/clean-install.sh'
+as_tester 'shellcheck -x dev/scripts/* dev/lib/python.sh tests/provisioning/clean-install.sh'
 
 echo 'clean install: PASS'

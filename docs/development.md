@@ -29,6 +29,27 @@ Log out and back in after `bootstrap` adds you to a group. `doctor` warns until 
 
 It doesn't change any other host configuration, including `/etc/nix/nix.conf` and existing libvirt networks.
 
+## The lab
+
+```sh
+./dev/scripts/up                   # build, define, and start the lab
+./dev/scripts/update --dry-run     # show what differs from this checkout
+./dev/scripts/update               # apply it, restarting affected machines
+./dev/scripts/down                 # stop the lab and keep its disks
+./dev/scripts/destroy              # remove the lab, keeping its disks
+./dev/scripts/destroy --disks      # also delete the disks
+```
+
+The first `up` downloads and builds NixOS, which can take a few minutes. Later runs only rebuild what changed. Stage new files with `git add` first, because Nix only sees tracked files.
+
+`dev/lab.yaml` defines the machines and networks. Resources are named `museum-net-dev-*`, and each lab bridge is named `mnd-*`. `up` refuses to continue if a bridge or libvirt resource with one of those names exists and isn't the lab's.
+
+Lab bridges have no host address, so you can't SSH to a machine from the host. Use the console instead, which logs in as root automatically. Press `Ctrl+]` to leave:
+
+```sh
+virsh -c qemu:///system console museum-net-dev-gateway
+```
+
 ## Nix
 
 Nix comes from Ubuntu's `nix-bin` and `nix-setup-systemd` packages, so no downloaded installer is involved. `flake.lock` pins nixpkgs. Flakes aren't enabled system-wide, so pass the feature flags on each call:
@@ -60,3 +81,11 @@ tests/provisioning/clean-install.sh
 ```
 
 A container has no KVM or running libvirt, so `clean-install.sh` expects those two `doctor` checks to fail and starts `nix-daemon` by hand. Run `doctor` on a real host to cover them.
+
+To test the real lab, including isolation and its full lifecycle:
+
+```sh
+tests/nixos/lab_live.py
+```
+
+This needs KVM, libvirt, and Nix. It destroys the lab and its disks when it finishes, so don't run it against a lab you want to keep.

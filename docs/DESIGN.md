@@ -88,9 +88,9 @@ Ubuntu host: athena / battlestation / onley
 
 The gateway VM should model **two assignable Ethernet NICs plus an optional third management/Wi-Fi surrogate**. Virtual interfaces test role changes; they do not reproduce actual wireless driver behavior. All lab networks are non-forwarding, not connected to physical NICs, and have no host NAT by default. VPN traffic stays within the virtual upstream network.
 
-Each lab network uses its own dedicated bridge, created and owned by the lab. Libvirt network names use the `museum-net-dev-` prefix; bridge device names need a shorter prefix such as `mnd-` because Linux limits interface names to 15 characters. The lab must never attach VMs, TAP devices, or emulators to existing host bridges (for example `virbr0`, `br0`, or Docker bridges) or to libvirt's `default` network. The 86Box TAP device joins the lab's museum bridge. `up` must fail rather than fall back to an existing bridge.
+Each lab network uses its own dedicated bridge, created and owned by the lab. Lab bridges are layer 2 only: they have no host address, so the host has no route into the lab. People reach machines through the libvirt console, and tests use the QEMU guest agent. Libvirt network names use the `museum-net-dev-` prefix; bridge device names need a shorter prefix such as `mnd-` because Linux limits interface names to 15 characters. The lab must never attach VMs, TAP devices, or emulators to existing host bridges (for example `virbr0`, `br0`, or Docker bridges) or to libvirt's `default` network. The 86Box TAP device joins the lab's museum bridge. `up` must fail rather than fall back to an existing bridge.
 
-Use distinct subnets for upstream, museum LAN(s), and VPN. Addresses must be configurable and collision-checked; examples in documentation must not become hard-coded defaults.
+Use distinct subnets for upstream, museum LAN(s), and VPN. Addresses must be configurable and collision-checked; examples in documentation must not become hard-coded defaults. `up` uses subnets from local configuration, otherwise it allocates free /24s from 198.18.0.0/15 and keeps them stable for that host.
 
 ## 4. Portable Ubuntu development environment
 
@@ -115,7 +115,9 @@ The development environment supports:
 - `update` reconciles generated definitions and NixOS configurations; supports dry-run and preserves mutable state.
 - `destroy` only removes explicitly owned resources, with separate confirmation for destructive disk deletion.
 
-Use a resource prefix such as `museum-net-dev-` and record ownership to avoid deleting other libvirt assets. All scripts support `--help`, clear exit statuses, and actionable diagnostics.
+`dev/lab.yaml` describes the lab's networks and machines; shared orchestration does not name them. Lab VMs boot directly from a NixOS kernel and initrd, and mount the host's Nix store read-only, so no disk image is built and a configuration change only needs a restart. Machine disks hold mutable state only.
+
+Use the `museum-net-dev-` resource prefix and an ownership marker in each definition to avoid deleting other libvirt assets. All scripts support `--help`, clear exit statuses, and actionable diagnostics.
 
 ### Dependency policy
 
@@ -155,7 +157,8 @@ New clients are added incrementally, and stay out of the mandatory bootstrap and
 |---|---|
 | Git repository | NixOS modules, Rust source, provisioning, manifests, tests |
 | `~/.config/museum-net/` | Local paths, subnet overrides, RAM/disk choices |
-| `~/.local/share/museum-net/` | VM disks, ROMs, emulator state, external tools |
+| `~/.local/share/museum-net/` | ROMs, emulator state, external tools, allocated lab subnets |
+| `/var/lib/libvirt/museum-net-dev/` | VM disks and boot files, in a lab-owned libvirt pool that QEMU can read |
 | `~/.cache/museum-net/` | Download/build cache |
 | Managed libvirt instance | Generated VM/network definitions |
 
@@ -459,7 +462,7 @@ Phases can overlap, but M0–M3 should establish the reproducible and manageable
 | Topic | Decision still needed |
 |---|---|
 | Physical interface identifiers | Inventory NIC, Wi-Fi, and UART identities on both gateways |
-| Default network addressing | Select non-conflicting configurable subnets and VPN IP allocation |
+| Default network addressing | Select non-conflicting production subnets and VPN IP allocation |
 | 86Box | Confirm ROM needs, TAP and serial configuration |
 | Protocol adapters | Verify Interloper/Sprocket invocation, image-serving semantics, and serial handoff |
 | DOS SLIP stack | Select compatible binaries and confirm redistribution rights |

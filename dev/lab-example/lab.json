@@ -1,0 +1,16 @@
+{
+  "machines": {
+    "dev-gateway": {
+      "interfaces": [
+        { "name": "mgmt0", "mac": "52:54:00:4d:01:01", "address": "198.18.0.2/24" },
+        { "name": "museum0", "mac": "52:54:00:4d:01:02", "address": "198.18.1.1/24" },
+        { "name": "museum1", "mac": "52:54:00:4d:01:03", "address": "198.18.2.1/24" }
+      ]
+    },
+    "dev-client": {
+      "interfaces": [
+        { "name": "eth0", "mac": "52:54:00:4d:02:01", "address": "198.18.1.10/24" }
+      ]
+    }
+  }
+}

@@ -239,6 +239,9 @@ class Host:
                     routes.append((route["dst"], route.get("dev", "?")))
         return routes
 
+    def interface_exists(self, name: str) -> bool:
+        return Path("/sys/class/net", name).exists()
+
     def free_bytes(self, path: Path) -> int:
         while not path.exists():
             path = path.parent
