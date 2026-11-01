@@ -8,6 +8,7 @@ import hashlib
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -16,7 +17,8 @@ from museum_dev.common import Manifest, Package, Paths, Tool, find_subnet_proble
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PATHS = Paths(config=Path("/c"), data=Path("/d"), cache=Path("/k"))
-TOOL = Tool("emu", "1.0", "https://example.invalid/emu", "a" * 64, "emu.bin", "testing")
+TOOL = Tool("emu", "1.0", "https://example.invalid/emu", "a" * 64, "emu.bin", "required", "testing")
+VINTAGE_TOOL = replace(TOOL, tier="vintage")
 MANIFEST = Manifest(
     packages=(
         Package("needed", "why", "required"),
@@ -113,6 +115,13 @@ class ManifestTests(unittest.TestCase):
         names = {p.name for p in common.load_manifest().tier("required")}
         self.assertLessEqual({"python3", "python3-yaml", "sudo", "curl"}, names)
 
+    def test_86box_is_optional_for_gateway_development(self):
+        manifest = common.load_manifest()
+        self.assertEqual(
+            [tool.tier for tool in common.load_tools() if tool.name == "86box"], ["vintage"]
+        )
+        self.assertIn("fuse3", {p.name for p in manifest.tier("vintage")})
+
     def test_tools_are_pinned_to_https_and_sha256(self):
         for tool in common.load_tools():
             self.assertTrue(tool.url.startswith("https://"))
@@ -198,6 +207,19 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(checks[0].status, doctor.FAIL)
         self.assertIn("mismatch", checks[0].detail)
 
+    def test_missing_vintage_tool_only_warns(self):
+        checks = doctor.check_tools(FakeHost(digest=None), [VINTAGE_TOOL], PATHS)
+        self.assertEqual(checks[0].status, doctor.WARN)
+        self.assertIn("--vintage", checks[0].fix)
+
+    def test_missing_required_tool_fails(self):
+        checks = doctor.check_tools(FakeHost(digest=None), [TOOL], PATHS)
+        self.assertEqual(checks[0].status, doctor.FAIL)
+
+    def test_tampered_vintage_tool_still_fails(self):
+        checks = doctor.check_tools(FakeHost(digest="b" * 64), [VINTAGE_TOOL], PATHS)
+        self.assertEqual(checks[0].status, doctor.FAIL)
+
     def test_missing_roms_only_warn(self):
         host = FakeHost()
         host.directory_exists = lambda path: False
@@ -246,6 +268,16 @@ class PlanTests(unittest.TestCase):
         plan = bootstrap.build_plan(host, MANIFEST, [TOOL], PATHS)
         self.assertEqual(plan.groups, ["libvirt"])
         self.assertEqual(plan.tools, [TOOL])
+
+
+    def test_vintage_tool_is_installed_only_on_request(self):
+        host = FakeHost(digest=None)
+        default = bootstrap.build_plan(host, MANIFEST, [VINTAGE_TOOL], PATHS)
+        requested = bootstrap.build_plan(
+            host, MANIFEST, [VINTAGE_TOOL], PATHS, ("required", "vintage")
+        )
+        self.assertEqual(default.tools, [])
+        self.assertEqual(requested.tools, [VINTAGE_TOOL])
 
 
 class RunTests(unittest.TestCase):
@@ -299,6 +331,7 @@ class InstallToolTests(unittest.TestCase):
             "https://example.invalid/emu",
             hashlib.sha256(self.body).hexdigest(),
             "emu.bin",
+            "required",
             "testing",
         )
 

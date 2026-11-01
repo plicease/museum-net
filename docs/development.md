@@ -17,6 +17,7 @@ The lab runs on Ubuntu 26.04 x86-64. Host setup is two commands:
 | `--yes` | Skip the confirmation prompt |
 | `--optional` | Also install debugging aids |
 | `--test` | Also install test dependencies |
+| `--vintage` | Also install 86Box and what it needs |
 
 Log out and back in after `bootstrap` adds you to a group. `doctor` warns until the new membership is active.
 
@@ -24,7 +25,7 @@ Log out and back in after `bootstrap` adds you to a group. `doctor` warns until 
 
 - Installs the packages in `dev/packages.yaml`, without APT recommends.
 - Adds you to the `libvirt`, `kvm`, and `nix-users` groups.
-- Installs the tools pinned in `dev/tools.lock.yaml` to `~/.local/share/museum-net/tools/`. A download that doesn't match its pinned SHA-256 is discarded.
+- With `--vintage`, installs the tools pinned in `dev/tools.lock.yaml` to `~/.local/share/museum-net/tools/`. A download that doesn't match its pinned SHA-256 is discarded.
 
 It doesn't change any other host configuration, including `/etc/nix/nix.conf` and existing libvirt networks.
 
@@ -40,7 +41,9 @@ Flakes only see files tracked by Git, so `git add` new files before evaluating.
 
 ## 86Box ROMs
 
-ROMs are user-supplied and never committed. Install a ROM set at `~/.local/share/museum-net/roms/`, or set `paths.roms` in the local config. `doctor` warns until it finds one.
+86Box is optional: gateway development and the required automated tests use lightweight Linux clients. Install it with `bootstrap --vintage` to run the DOS and Windows for Workgroups 3.11 clients under `dev/machines/`.
+
+ROMs are user-supplied and never committed, as are installation media, licensed software, and installed disk images. Install a ROM set at `~/.local/share/museum-net/roms/`, or set `paths.roms` in the local config. `doctor` warns until it finds one.
 
 ## Local configuration
 

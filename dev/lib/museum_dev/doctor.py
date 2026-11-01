@@ -33,6 +33,13 @@ class Check:
     fix: str = ""
 
 
+def missing(tier: str) -> tuple[str, str]:
+    """Return the status and fix for something absent from the given tier."""
+    if tier == "required":
+        return FAIL, BOOTSTRAP
+    return WARN, f"{BOOTSTRAP} --{tier}"
+
+
 def check_platform(host: Host) -> list[Check]:
     release = host.os_release()
     name = release.get("PRETTY_NAME", "unknown system")
@@ -103,10 +110,9 @@ def check_packages(host: Host, manifest: Manifest) -> list[Check]:
         if package_satisfied(host, package):
             checks.append(Check(OK, name, "present"))
             continue
-        status = FAIL if package.tier == "required" else WARN
+        status, fix = missing(package.tier)
         if host.package_available(package.name):
-            flag = "" if package.tier == "required" else f" --{package.tier}"
-            checks.append(Check(status, name, package.why, BOOTSTRAP + flag))
+            checks.append(Check(status, name, package.why, fix))
         else:
             checks.append(
                 Check(status, name, "no APT candidate", "run apt update or fix dev/packages.yaml")
@@ -130,7 +136,8 @@ def check_tools(host: Host, tools: list[Tool], paths: Paths) -> list[Check]:
         name = f"tool {tool.name} {tool.version}"
         digest = host.file_sha256(paths.tool_path(tool))
         if digest is None:
-            checks.append(Check(FAIL, name, tool.why, BOOTSTRAP))
+            status, fix = missing(tool.tier)
+            checks.append(Check(status, name, tool.why, fix))
         elif digest != tool.sha256:
             checks.append(
                 Check(

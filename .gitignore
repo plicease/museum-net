@@ -13,4 +13,8 @@ __pycache__/
 *.qcow2
 *.img
 *.iso
+*.vhd
+*.ima
+*.86f
+*.rom
 *.AppImage

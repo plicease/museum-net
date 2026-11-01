@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-TIERS = ("required", "optional", "test")
+TIERS = ("required", "optional", "test", "vintage")
 
 
 @dataclass(frozen=True)
@@ -46,6 +46,7 @@ class Tool:
     url: str
     sha256: str
     filename: str
+    tier: str
     why: str
 
 

@@ -63,7 +63,8 @@ def build_plan(
         tools=[
             tool
             for tool in tools
-            if host.file_sha256(paths.tool_path(tool)) != tool.sha256
+            if tool.tier in tiers
+            and host.file_sha256(paths.tool_path(tool)) != tool.sha256
         ],
     )
 
@@ -177,6 +178,7 @@ def main() -> int:
     )
     parser.add_argument("--optional", action="store_true", help="also install debugging aids")
     parser.add_argument("--test", action="store_true", help="also install test dependencies")
+    parser.add_argument("--vintage", action="store_true", help="also install 86Box and its needs")
     parser.add_argument("--dry-run", action="store_true", help="show the plan and change nothing")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     args = parser.parse_args()
@@ -186,6 +188,8 @@ def main() -> int:
         tiers.append("optional")
     if args.test:
         tiers.append("test")
+    if args.vintage:
+        tiers.append("vintage")
     return run(
         Host(),
         load_manifest(),

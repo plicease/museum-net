@@ -125,6 +125,21 @@ Nix installation/build workflow must be explicit and documented; `flake.lock` pi
 
 86Box is managed separately when not available through the supported Ubuntu repositories: use a verified upstream Linux artifact, pinned version and SHA-256; install into a user-owned tools directory. Do not invent release filenames or checksums. Firmware ROMs and operating-system images are user-supplied and excluded from the repository.
 
+### Vintage client emulation
+
+The lab exercises real period-appropriate clients through 86Box, as well as modern Linux tools.
+
+| Environment | Machine configuration | Purpose |
+|---|---|---|
+| MS-DOS | `dev/machines/dos/` | Primary serial-protocol target: Interloper bootstrap, Sprocket, SLIP/PPP, and subsequent FTP/HTTP access |
+| Windows for Workgroups 3.11 | `dev/machines/win311/` | Additional compatibility target: emulated Ethernet and serial networking, WinSock/TCP/IP applications, historical FTP clients, and early HTTP browsers such as Mosaic and Netscape. Reflects the physical IBM PS/2 Model 70 running DOS 6.22 and Windows 3.11 |
+
+Git tracks 86Box machine configuration only. ROMs, Windows and MS-DOS installation media, licensed software, and installed disk images are never committed; users supply them locally.
+
+Both environments are optional for the basic gateway development workflow and ordinary CI. Lightweight Linux clients carry the mandatory automated service and isolation tests; 86Box covers historical compatibility through manual or opt-in integration tests. Windows testing stays manual until a repeatable guest-side test harness exists.
+
+Machine configurations attach only to the lab's dedicated isolated museum Ethernet network and virtual serial bridges, never to existing host bridges.
+
 ### Local state
 
 | Location | Purpose |
@@ -421,7 +436,7 @@ Source code and declarative configuration are tracked; generated VM images, prop
 | M1 | Isolated KVM/libvirt lab with NixOS `dev-gateway` and test client |
 | M2 | NixOS `dev-nullray`, OpenVPN client/server, SSH-over-VPN tests |
 | M3 | Rust `museum-core`, `museumd`, local `museumctl`, persisted config |
-| M4 | Museum Ethernet, 86Box client, firewall and local FTP/HTTP fixtures |
+| M4 | Museum Ethernet, lightweight Linux test client, firewall and local FTP/HTTP fixtures, opt-in 86Box clients |
 | M5 | Virtual serial adapters: SLIP, PPP, Sprocket, Interloper |
 | M6 | `museum-mirror`, 1 TB USB build/update/import, archive serving |
 | M7 | Reproducible non-bootable DOS Interloper bootstrap image |

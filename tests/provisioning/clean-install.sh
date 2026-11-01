@@ -46,8 +46,13 @@ if as_tester './dev/scripts/bootstrap </dev/null'; then
 fi
 [ "$before" = "$(state)" ] || fail 'unconfirmed run changed the system'
 
-echo '== clean install'
-as_tester './dev/scripts/bootstrap --yes --optional --test'
+echo '== default install leaves out the vintage tier'
+as_tester './dev/scripts/bootstrap --yes'
+output=$(as_tester ./dev/scripts/doctor) || true
+echo "$output" | grep -q '^\[WARN\] tool 86box' || fail '86Box should be optional'
+
+echo '== full install'
+as_tester './dev/scripts/bootstrap --yes --optional --test --vintage'
 
 echo '== Nix works unprivileged through the daemon, and the flake evaluates'
 nix-daemon >/dev/null 2>&1 &
@@ -70,7 +75,7 @@ unexpected=$(echo "$output" | grep '^\[FAIL\]' |
 echo "$output" | grep -q '^\[ OK \] tool 86box' || fail '86Box not verified'
 
 echo '== rerun is a no-op'
-output=$(as_tester './dev/scripts/bootstrap --yes --optional --test')
+output=$(as_tester './dev/scripts/bootstrap --yes --optional --test --vintage')
 echo "$output"
 echo "$output" | grep -q '^Nothing to do' || fail 'second run found work'
 [ "$before" = "$(state)" ] || fail 'second run changed the system'

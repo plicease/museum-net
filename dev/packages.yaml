@@ -3,6 +3,7 @@
 # required: doctor fails without it; bootstrap always installs it.
 # optional: debugging aids; doctor warns; `bootstrap --optional` installs them.
 # test:     needed to run tests; doctor warns; `bootstrap --test` installs them.
+# vintage:  needed for 86Box clients; doctor warns; `bootstrap --vintage` installs them.
 #
 # Set `command` when a non-APT install is equally acceptable (such as rustup):
 # the entry is then satisfied by that command being on PATH.
@@ -24,7 +25,7 @@ packages:
     - name: git
       why: Nix flakes read tracked files through git
     - name: curl
-      why: Downloads pinned tools such as 86Box
+      why: Downloads pinned tools
     - name: ca-certificates
       why: TLS verification for curl and Nix
     - name: jq
@@ -47,8 +48,6 @@ packages:
       why: Builds the pinned NixOS configurations without a downloaded installer
     - name: nix-setup-systemd
       why: Runs nix-daemon so unprivileged users can build
-    - name: fuse3
-      why: Provides fusermount, which the 86Box AppImage uses to mount itself
   optional:
     - name: virt-manager
       why: Graphical console and inspection for lab VMs
@@ -64,3 +63,6 @@ packages:
     - name: cargo
       command: cargo
       why: Builds and tests the Rust crates; a rustup toolchain also satisfies this
+  vintage:
+    - name: fuse3
+      why: Provides fusermount, which the 86Box AppImage uses to mount itself
