@@ -1,0 +1,13 @@
+#!/bin/sh
+# Read-only host check. See dev/lib/museum_dev/doctor.py.
+set -eu
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+# shellcheck source=dev/lib/python.sh
+. "$root/dev/lib/python.sh"
+
+if ! python_ready; then
+    echo 'doctor: needs Python 3.11+ with PyYAML; run ./dev/scripts/bootstrap' >&2
+    exit 1
+fi
+run_python doctor "$@"

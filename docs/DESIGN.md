@@ -119,9 +119,9 @@ Use a resource prefix such as `museum-net-dev-` and record ownership to avoid de
 
 ### Dependency policy
 
-Prefer Ubuntu 26.04 APT packages. Candidate packages to validate against the actual release: `qemu-system-x86`, `qemu-utils`, `libvirt-daemon-system`, `libvirt-clients`, `virtinst`, `socat`, `iproute2`, `python3`, `git`, `curl`, `ca-certificates`, `jq`, plus optional `virt-manager`, `tcpdump`, `dnsutils`, and `netcat-openbsd`. The dependency manifest distinguishes required, optional, and test-only packages and records why each is needed.
+Prefer Ubuntu 26.04 APT packages. Candidate packages to validate against the actual release: `qemu-system-x86`, `qemu-utils`, `libvirt-daemon-system`, `libvirt-clients`, `virtinst`, `socat`, `iproute2`, `python3`, `git`, `curl`, `ca-certificates`, `jq`, plus optional `virt-manager`, `tcpdump`, `bind9-dnsutils`, and `netcat-openbsd`. The dependency manifest distinguishes required, optional, and test-only packages and records why each is needed.
 
-Nix installation/build workflow must be explicit and documented; `flake.lock` pins NixOS inputs. Do not silently execute downloaded installers.
+Nix installation/build workflow must be explicit and documented; `flake.lock` pins NixOS inputs. Do not silently execute downloaded installers. Hosts use Ubuntu's `nix-bin` and `nix-setup-systemd` packages.
 
 86Box is managed separately when not available through the supported Ubuntu repositories: use a verified upstream Linux artifact, pinned version and SHA-256; install into a user-owned tools directory. Do not invent release filenames or checksums. Firmware ROMs and operating-system images are user-supplied and excluded from the repository.
 
@@ -324,7 +324,7 @@ Test image contents and file accessibility in 86Box, then on real XT/PS/2 hardwa
 museum-net/
   README.md
   docs/
-    design.md
+    DESIGN.md
     security.md
     development.md
   flake.nix
@@ -436,8 +436,7 @@ Phases can overlap, but M0–M3 should establish the reproducible and manageable
 |---|---|
 | Physical interface identifiers | Inventory NIC, Wi-Fi, and UART identities on both gateways |
 | Default network addressing | Select non-conflicting configurable subnets and VPN IP allocation |
-| Nix bootstrap | Choose a documented, reproducible host-side Nix install/build method |
-| 86Box | Confirm current Linux distribution format, ROM needs, TAP and serial configuration |
+| 86Box | Confirm ROM needs, TAP and serial configuration |
 | Protocol adapters | Verify Interloper/Sprocket invocation, image-serving semantics, and serial handoff |
 | DOS SLIP stack | Select compatible binaries and confirm redistribution rights |
 | Archive size | Measure actual archive against 1 TB USB capacity, filesystem overhead, and update headroom |

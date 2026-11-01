@@ -1,0 +1,66 @@
+# Ubuntu host dependencies for the development lab, validated against 26.04.
+#
+# required: doctor fails without it; bootstrap always installs it.
+# optional: debugging aids; doctor warns; `bootstrap --optional` installs them.
+# test:     needed to run tests; doctor warns; `bootstrap --test` installs them.
+#
+# Set `command` when a non-APT install is equally acceptable (such as rustup):
+# the entry is then satisfied by that command being on PATH.
+version: 1
+
+groups:
+  - libvirt
+  - kvm
+  - nix-users
+
+packages:
+  required:
+    - name: python3
+      why: Runs the doctor and bootstrap logic
+    - name: python3-yaml
+      why: Parses this manifest and tools.lock.yaml
+    - name: sudo
+      why: Explicit privilege escalation for bootstrap
+    - name: git
+      why: Nix flakes read tracked files through git
+    - name: curl
+      why: Downloads pinned tools such as 86Box
+    - name: ca-certificates
+      why: TLS verification for curl and Nix
+    - name: jq
+      why: Scripted inspection of libvirt and ip JSON output
+    - name: iproute2
+      why: Reads host routes for subnet collision checks and manages TAP devices
+    - name: socat
+      why: Bridges emulated serial ports over PTY and TCP
+    - name: qemu-system-x86
+      why: Runs the NixOS VMs and QEMU test clients under KVM
+    - name: qemu-utils
+      why: Creates and inspects VM disk images
+    - name: libvirt-daemon-system
+      why: Owns the lab VM and network definitions
+    - name: libvirt-clients
+      why: Provides virsh
+    - name: virtinst
+      why: Provides virt-install and virt-xml for generating definitions
+    - name: nix-bin
+      why: Builds the pinned NixOS configurations without a downloaded installer
+    - name: nix-setup-systemd
+      why: Runs nix-daemon so unprivileged users can build
+    - name: fuse3
+      why: Provides fusermount, which the 86Box AppImage uses to mount itself
+  optional:
+    - name: virt-manager
+      why: Graphical console and inspection for lab VMs
+    - name: tcpdump
+      why: Debugs lab bridges and firewall behaviour
+    - name: bind9-dnsutils
+      why: Provides dig for debugging name resolution; replaces dnsutils on 26.04
+    - name: netcat-openbsd
+      why: Probes service reachability by hand
+  test:
+    - name: shellcheck
+      why: Lints the shell entry points
+    - name: cargo
+      command: cargo
+      why: Builds and tests the Rust crates; a rustup toolchain also satisfies this

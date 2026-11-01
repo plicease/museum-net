@@ -1,0 +1,16 @@
+# Rust
+/target/
+
+# Nix
+/result
+/result-*
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated or proprietary media, never tracked (see docs/DESIGN.md §12)
+*.qcow2
+*.img
+*.iso
+*.AppImage

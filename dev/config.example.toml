@@ -1,0 +1,13 @@
+# Copy to ~/.config/museum-net/config.toml. Every setting is optional.
+#
+# The subnets below only show the format: they are not defaults, and you should
+# pick ranges that are free on this host. doctor checks them against host routes
+# and against each other.
+
+# [subnets]
+# upstream = "198.18.10.0/24"
+# museum_a = "198.18.20.0/24"
+# vpn = "198.18.30.0/24"
+
+# [paths]
+# roms = "/path/to/86box/roms"
