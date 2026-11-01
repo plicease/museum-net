@@ -88,6 +88,8 @@ Ubuntu host: athena / battlestation / onley
 
 The gateway VM should model **two assignable Ethernet NICs plus an optional third management/Wi-Fi surrogate**. Virtual interfaces test role changes; they do not reproduce actual wireless driver behavior. All lab networks are non-forwarding, not connected to physical NICs, and have no host NAT by default. VPN traffic stays within the virtual upstream network.
 
+Each lab network uses its own dedicated bridge, created and owned by the lab. Libvirt network names use the `museum-net-dev-` prefix; bridge device names need a shorter prefix such as `mnd-` because Linux limits interface names to 15 characters. The lab must never attach VMs, TAP devices, or emulators to existing host bridges (for example `virbr0`, `br0`, or Docker bridges) or to libvirt's `default` network. The 86Box TAP device joins the lab's museum bridge. `up` must fail rather than fall back to an existing bridge.
+
 Use distinct subnets for upstream, museum LAN(s), and VPN. Addresses must be configurable and collision-checked; examples in documentation must not become hard-coded defaults.
 
 ## 4. Portable Ubuntu development environment
