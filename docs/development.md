@@ -50,6 +50,23 @@ Lab bridges have no host address, so you can't SSH to a machine from the host. U
 virsh -c qemu:///system console museum-net-dev-gateway
 ```
 
+| Machine | Role |
+|---|---|
+| `dev-nullray` | OpenVPN and SSH server, standing in for production `nullray` |
+| `dev-gateway` | Gateway, with a management NIC and two museum NICs |
+| `dev-admin` | Separate management client, connected through the VPN |
+| `dev-client` | Lightweight Linux client on a museum network |
+
+From inside a machine, SSH uses the `museum-admin` user and the lab's own key. For example, from `dev-admin`, where 198.18.3.2 stands for the gateway's VPN address:
+
+```sh
+ssh -i /run/lab-secrets/id_ed25519 museum-admin@198.18.3.2
+```
+
+Your lab's addresses are in `~/.local/share/museum-net/lab/subnets.json`.
+
+`up` generates a throwaway test CA and SSH keys in `~/.local/share/museum-net/lab/credentials/`. They persist between runs, and `destroy --disks` leaves them in place. Delete that directory and run `update` to replace them. Never use them outside the lab.
+
 ## Nix
 
 Nix comes from Ubuntu's `nix-bin` and `nix-setup-systemd` packages, so no downloaded installer is involved. `flake.lock` pins nixpkgs. Flakes aren't enabled system-wide, so pass the feature flags on each call:
@@ -82,7 +99,7 @@ tests/provisioning/clean-install.sh
 
 A container has no KVM or running libvirt, so `clean-install.sh` expects those two `doctor` checks to fail and starts `nix-daemon` by hand. Run `doctor` on a real host to cover them.
 
-To test the real lab, including isolation and its full lifecycle:
+To test the real lab, including isolation, the VPN, SSH, and its full lifecycle:
 
 ```sh
 tests/nixos/lab_live.py

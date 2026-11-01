@@ -22,6 +22,7 @@ from typing import Callable
 import yaml
 
 from .common import REPO_ROOT, Host, Paths, find_subnet_problems, load_config
+from .credentials import Credentials
 from .libvirt import LibvirtError, Virsh
 
 PREFIX = "museum-net-dev-"
@@ -34,7 +35,7 @@ OWNER_NS = "https://github.com/plicease/museum-net/lab"
 ALLOCATION_RANGE = "198.18.0.0/15"
 SHUTDOWN_TIMEOUT = 60
 # Bump when domain_xml changes shape, so existing machines are redefined.
-DOMAIN_LAYOUT = "2"
+DOMAIN_LAYOUT = "3"
 NIX = ["nix", "--extra-experimental-features", "nix-command flakes"]
 
 
@@ -67,6 +68,17 @@ class Machine:
     memory_mib: int
     disk_gib: int
     interfaces: tuple[Interface, ...]
+    vpn_role: str | None = None
+    vpn_host: int | None = None
+    ssh_from: tuple[str, ...] = ()
+
+    @property
+    def has_secrets(self) -> bool:
+        return self.vpn_role is not None or bool(self.ssh_from)
+
+    @property
+    def secrets(self) -> str:
+        return f"{self.name}.secrets"
 
     @property
     def domain(self) -> str:
@@ -89,6 +101,12 @@ class Machine:
 class Lab:
     networks: tuple[Network, ...]
     machines: tuple[Machine, ...]
+    vpn_subnet: str | None = None
+
+    @property
+    def subnet_keys(self) -> list[str]:
+        keys = [network.key for network in self.networks]
+        return keys + [self.vpn_subnet] if self.vpn_subnet else keys
 
 
 def load_lab(config: dict, path: Path = REPO_ROOT / "dev/lab.yaml") -> Lab:
@@ -121,9 +139,17 @@ def load_lab(config: dict, path: Path = REPO_ROOT / "dev/lab.yaml") -> Lab:
                 memory_mib=local.get("memory_mib", entry["memory_mib"]),
                 disk_gib=local.get("disk_gib", entry["disk_gib"]),
                 interfaces=tuple(interfaces),
+                vpn_role=entry.get("vpn", {}).get("role"),
+                vpn_host=entry.get("vpn", {}).get("host"),
+                ssh_from=tuple(entry.get("ssh_from", ())),
             )
         )
-    return Lab(networks, tuple(machines))
+    names = {machine.name for machine in machines}
+    for machine in machines:
+        unknown = set(machine.ssh_from) - names
+        if unknown:
+            raise LabError(f"{machine.name}: unknown ssh_from {sorted(unknown)}")
+    return Lab(networks, tuple(machines), data.get("vpn", {}).get("subnet"))
 
 
 def allocate_subnets(
@@ -134,18 +160,18 @@ def allocate_subnets(
 ) -> dict[str, str]:
     """Choose a subnet per network: config first, then saved, then a free /24."""
     chosen = {}
-    for network in lab.networks:
-        if network.key in configured:
-            chosen[network.key] = configured[network.key]
-        elif network.key in saved:
-            chosen[network.key] = saved[network.key]
+    for key in lab.subnet_keys:
+        if key in configured:
+            chosen[key] = configured[key]
+        elif key in saved:
+            chosen[key] = saved[key]
 
     candidates = ipaddress.ip_network(ALLOCATION_RANGE).subnets(new_prefix=24)
-    for network in lab.networks:
-        if network.key in chosen:
+    for key in lab.subnet_keys:
+        if key in chosen:
             continue
         for candidate in candidates:
-            attempt = {**chosen, network.key: str(candidate)}
+            attempt = {**chosen, key: str(candidate)}
             if not find_subnet_problems(attempt, routes):
                 chosen = attempt
                 break
@@ -159,8 +185,38 @@ def host_address(subnet: str, host: int) -> str:
     return f"{network[host]}/{network.prefixlen}"
 
 
-def nix_spec(lab: Lab, subnets: dict[str, str]) -> dict:
-    """Return the per-host values passed to NixOS as the flake's `lab` input."""
+def _vpn_ip(lab: Lab, subnets: dict[str, str], machine: Machine) -> str:
+    return str(ipaddress.ip_network(subnets[lab.vpn_subnet])[machine.vpn_host])
+
+
+def _vpn_spec(lab: Lab, subnets: dict[str, str], machine: Machine, ca: str) -> dict | None:
+    if machine.vpn_role is None:
+        return None
+    network = ipaddress.ip_network(subnets[lab.vpn_subnet])
+    server = next(m for m in lab.machines if m.vpn_role == "server")
+    spec = {
+        "role": machine.vpn_role,
+        "ca": ca,
+        "network": str(network.network_address),
+        "netmask": str(network.netmask),
+        "serverName": server.name,
+        "server": host_address(subnets[server.interfaces[0].network], server.interfaces[0].host)
+        .split("/")[0],
+    }
+    if machine.vpn_role == "server":
+        spec["clients"] = {
+            m.name: _vpn_ip(lab, subnets, m) for m in lab.machines if m.vpn_role == "client"
+        }
+    return spec
+
+
+def nix_spec(lab: Lab, subnets: dict[str, str], public: dict) -> dict:
+    """Return the per-host values passed to NixOS as the flake's `lab` input.
+
+    All of this enters the Nix store, which every lab VM can read, so it must
+    only ever contain public values.
+    """
+    servers = [m for m in lab.machines if m.ssh_from and m.vpn_role]
     return {
         "machines": {
             machine.name: {
@@ -171,7 +227,15 @@ def nix_spec(lab: Lab, subnets: dict[str, str]) -> dict:
                         "address": host_address(subnets[interface.network], interface.host),
                     }
                     for interface in machine.interfaces
-                ]
+                ],
+                "hasSecrets": machine.has_secrets,
+                "vpn": _vpn_spec(lab, subnets, machine, public["ca"]),
+                "authorizedKeys": [public["identities"][name] for name in machine.ssh_from],
+                "knownHosts": (
+                    {_vpn_ip(lab, subnets, m): public["hostKeys"][m.name] for m in servers}
+                    if machine.has_secrets
+                    else {}
+                ),
             }
             for machine in lab.machines
         }
@@ -243,6 +307,14 @@ def domain_xml(lab: Lab, machine: Machine, toplevel: str, params: str) -> str:
     ET.SubElement(disk, "driver", {"name": "qemu", "type": "qcow2"})
     ET.SubElement(disk, "source", {"file": f"{POOL_PATH}/{machine.disk}"})
     ET.SubElement(disk, "target", {"dev": "vda", "bus": "virtio"})
+
+    if machine.has_secrets:
+        secrets = ET.SubElement(devices, "disk", {"type": "file", "device": "disk"})
+        ET.SubElement(secrets, "driver", {"name": "qemu", "type": "raw"})
+        ET.SubElement(secrets, "source", {"file": f"{POOL_PATH}/{machine.secrets}"})
+        ET.SubElement(secrets, "target", {"dev": "vdb", "bus": "virtio"})
+        ET.SubElement(secrets, "readonly")
+        ET.SubElement(secrets, "serial").text = "lab-secrets"
 
     store = ET.SubElement(devices, "filesystem", {"type": "mount", "accessmode": "squash"})
     ET.SubElement(store, "driver", {"type": "path"})
@@ -328,11 +400,12 @@ class Step:
 class Reconciler:
     """Works out what differs from dev/lab.yaml, and how to fix it."""
 
-    def __init__(self, lab: Lab, virsh: Virsh, nix: Nix, host: Host):
+    def __init__(self, lab: Lab, virsh: Virsh, nix: Nix, host: Host, credentials=None):
         self.lab = lab
         self.virsh = virsh
         self.nix = nix
         self.host = host
+        self.credentials = credentials
 
     def check_ownership(self) -> None:
         domains = self.virsh.domains()
@@ -437,6 +510,11 @@ class Reconciler:
             self.virsh.undefine_domain(machine.domain)
         self.virsh.upload_file(POOL, machine.kernel, (toplevel / "kernel").resolve())
         self.virsh.upload_file(POOL, machine.initrd, (toplevel / "initrd").resolve())
+        if machine.has_secrets:
+            with tempfile.TemporaryDirectory() as directory:
+                bundle = Path(directory) / machine.secrets
+                self.credentials.bundle(machine, bundle)
+                self.virsh.upload_file(POOL, machine.secrets, bundle)
         params = (toplevel / "kernel-params").read_text().strip()
         xml = domain_xml(self.lab, machine, str(toplevel), params)
         with tempfile.NamedTemporaryFile("w", suffix=".xml") as file:
@@ -490,7 +568,8 @@ class Context:
     subnets: dict[str, str]
 
 
-def load_context() -> Context:
+def load_context(generate: bool = True) -> Context:
+    """Load the lab. With generate=False, nothing is written anywhere."""
     host = Host()
     paths = Paths.from_env()
     config = load_config(paths)
@@ -503,8 +582,13 @@ def load_context() -> Context:
     if problems:
         raise LabError("subnet problems:\n  " + "\n  ".join(problems))
     virsh = Virsh()
-    nix = Nix(nix_spec(lab, subnets), paths.data / "lab" / "gcroots")
-    return Context(lab, virsh, Reconciler(lab, virsh, nix, host), state_file, subnets)
+    credentials = Credentials(paths.data / "lab" / "credentials")
+    if generate:
+        credentials.ensure(list(lab.machines))
+    public = credentials.public(list(lab.machines))
+    nix = Nix(nix_spec(lab, subnets, public), paths.data / "lab" / "gcroots")
+    reconciler = Reconciler(lab, virsh, nix, host, credentials)
+    return Context(lab, virsh, reconciler, state_file, subnets)
 
 
 def save_subnets(context: Context) -> None:
@@ -546,7 +630,7 @@ def command_down(args: argparse.Namespace) -> int:
 
 
 def command_update(args: argparse.Namespace) -> int:
-    context = load_context()
+    context = load_context(generate=not args.dry_run)
     steps, changed = context.reconciler.plan()
     if not steps:
         print("Nothing to do: the lab matches this checkout.")
@@ -640,7 +724,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         return args.run(args)
-    except (LabError, LibvirtError) as error:
+    except (LabError, LibvirtError, RuntimeError) as error:
         print(f"{args.command}: {error}", file=sys.stderr)
         return 1
 

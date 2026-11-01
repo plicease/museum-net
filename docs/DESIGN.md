@@ -75,7 +75,7 @@ Ubuntu host: athena / battlestation / onley
  +-- isolated upstream/management virtual network
  |     +-- dev-nullray (NixOS): OpenVPN server, SSH
  |     +-- dev-gateway (NixOS): OpenVPN client, SSH, museumd
- |     +-- optional management test client
+ |     +-- dev-admin (NixOS): separate management client over the VPN
  |
  +-- isolated museum Ethernet network
  |     +-- dev-gateway museum NIC
@@ -157,7 +157,7 @@ New clients are added incrementally, and stay out of the mandatory bootstrap and
 |---|---|
 | Git repository | NixOS modules, Rust source, provisioning, manifests, tests |
 | `~/.config/museum-net/` | Local paths, subnet overrides, RAM/disk choices |
-| `~/.local/share/museum-net/` | ROMs, emulator state, external tools, allocated lab subnets |
+| `~/.local/share/museum-net/` | ROMs, emulator state, external tools, allocated lab subnets, throwaway lab credentials |
 | `/var/lib/libvirt/museum-net-dev/` | VM disks and boot files, in a lab-owned libvirt pool that QEMU can read |
 | `~/.cache/museum-net/` | Download/build cache |
 | Managed libvirt instance | Generated VM/network definitions |
@@ -176,7 +176,7 @@ Model physical devices independently from logical network zones:
 
 Default physical layout: wired NIC 1 = management, wired NIC 2 = museum LAN, Wi-Fi = disabled/optional management. Alternate layout: Wi-Fi = management, both wired NICs = museum LAN(s). A role change must be validated against policy and available recovery paths.
 
-Gateway firewall must block museum clients from SSH, management HTTP(S), VPN endpoints, and other management services. It must block forwarding between museum, management, VPN, and physical upstream networks unless a narrowly scoped policy explicitly allows it. Cover IPv4 and IPv6, including bridging behavior; do not rely only on IP forwarding settings.
+Gateway firewall must block museum clients from SSH, management HTTP(S), VPN endpoints, and other management services. It must block forwarding between museum, management, VPN, and physical upstream networks unless a narrowly scoped policy explicitly allows it. Cover IPv4 and IPv6, including bridging behavior; do not rely only on IP forwarding settings. Linux answers for any local address on any interface, so a museum interface accepts traffic only for its own addresses; otherwise a client that routes through the gateway could reach its management and VPN addresses with forwarding off.
 
 For remote network reconfiguration, use a timed commit/confirm/rollback mechanism. Preserve local console and Unix-socket management even when all network interfaces are misconfigured.
 
@@ -184,7 +184,9 @@ For remote network reconfiguration, use a timed commit/confirm/rollback mechanis
 
 Production gateways initiate OpenVPN connections to Debian `nullray` using separate per-gateway credentials. The gateway should have a predictable VPN IP, permit SSH over that IP, and optionally permit the authenticated management portal over the VPN. The VPN must reconnect automatically and must **not** provide a default route or forwarding path for vintage clients.
 
-`dev-nullray` is a small NixOS VM that emulates the **observable OpenVPN and SSH behavior** of production `nullray`; it does not need to replicate Debian internals. It runs an OpenVPN server, SSH server, isolated test PKI, and appropriate routing/firewall rules. Never reuse production VPN keys or silently connect development gateways to production.
+`dev-nullray` is a small NixOS VM that emulates the **observable OpenVPN and SSH behavior** of production `nullray`; it does not need to replicate Debian internals. It runs an OpenVPN server, SSH server, isolated test PKI, and appropriate routing/firewall rules. Never reuse production VPN keys or silently connect development gateways to production. `modules/vpn.nix` has no default server, so a host only reaches a VPN it is explicitly configured for.
+
+Only clients the server lists can connect, and each gets a fixed address. All lab VMs can read the shared Nix store, so private keys never enter it: `up` generates throwaway credentials on the host and gives each machine only its own, on a read-only disk. Museum clients get none.
 
 Integration tests must verify:
 - Tunnel establishment and expected address assignment.

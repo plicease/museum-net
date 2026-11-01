@@ -1,16 +1,105 @@
 {
   "machines": {
+    "dev-nullray": {
+      "interfaces": [
+        {
+          "name": "mgmt0",
+          "mac": "52:54:00:4d:01:01",
+          "address": "198.18.0.1/24"
+        }
+      ],
+      "hasSecrets": true,
+      "vpn": {
+        "role": "server",
+        "ca": "pending",
+        "network": "198.18.3.0",
+        "netmask": "255.255.255.0",
+        "serverName": "dev-nullray",
+        "server": "198.18.0.1",
+        "clients": {
+          "dev-admin": "198.18.3.3",
+          "dev-gateway": "198.18.3.2"
+        }
+      },
+      "authorizedKeys": [
+        "pending"
+      ],
+      "knownHosts": {
+        "198.18.3.1": "pending",
+        "198.18.3.2": "pending"
+      }
+    },
+    "dev-admin": {
+      "interfaces": [
+        {
+          "name": "mgmt0",
+          "mac": "52:54:00:4d:02:01",
+          "address": "198.18.0.3/24"
+        }
+      ],
+      "hasSecrets": true,
+      "vpn": {
+        "role": "client",
+        "ca": "pending",
+        "network": "198.18.3.0",
+        "netmask": "255.255.255.0",
+        "serverName": "dev-nullray",
+        "server": "198.18.0.1"
+      },
+      "authorizedKeys": [],
+      "knownHosts": {
+        "198.18.3.1": "pending",
+        "198.18.3.2": "pending"
+      }
+    },
     "dev-gateway": {
       "interfaces": [
-        { "name": "mgmt0", "mac": "52:54:00:4d:01:01", "address": "198.18.0.2/24" },
-        { "name": "museum0", "mac": "52:54:00:4d:01:02", "address": "198.18.1.1/24" },
-        { "name": "museum1", "mac": "52:54:00:4d:01:03", "address": "198.18.2.1/24" }
-      ]
+        {
+          "name": "mgmt0",
+          "mac": "52:54:00:4d:03:01",
+          "address": "198.18.0.2/24"
+        },
+        {
+          "name": "museum0",
+          "mac": "52:54:00:4d:03:02",
+          "address": "198.18.1.1/24"
+        },
+        {
+          "name": "museum1",
+          "mac": "52:54:00:4d:03:03",
+          "address": "198.18.2.1/24"
+        }
+      ],
+      "hasSecrets": true,
+      "vpn": {
+        "role": "client",
+        "ca": "pending",
+        "network": "198.18.3.0",
+        "netmask": "255.255.255.0",
+        "serverName": "dev-nullray",
+        "server": "198.18.0.1"
+      },
+      "authorizedKeys": [
+        "pending",
+        "pending"
+      ],
+      "knownHosts": {
+        "198.18.3.1": "pending",
+        "198.18.3.2": "pending"
+      }
     },
     "dev-client": {
       "interfaces": [
-        { "name": "eth0", "mac": "52:54:00:4d:02:01", "address": "198.18.1.10/24" }
-      ]
+        {
+          "name": "eth0",
+          "mac": "52:54:00:4d:04:01",
+          "address": "198.18.1.10/24"
+        }
+      ],
+      "hasSecrets": false,
+      "vpn": null,
+      "authorizedKeys": [],
+      "knownHosts": {}
     }
   }
 }

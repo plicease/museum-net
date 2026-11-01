@@ -32,6 +32,10 @@ packages:
       why: Scripted inspection of libvirt and ip JSON output
     - name: iproute2
       why: Reads host routes for subnet collision checks and manages TAP devices
+    - name: openssl
+      why: Generates the lab's throwaway test PKI
+    - name: openssh-client
+      why: Generates the lab's SSH keys with ssh-keygen
     - name: socat
       why: Bridges emulated serial ports over PTY and TCP
     - name: qemu-system-x86

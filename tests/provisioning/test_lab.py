@@ -4,11 +4,16 @@ Run from the repository root:
     PYTHONPATH=dev/lib python3 -m unittest discover -s tests/provisioning
 """
 
+import json
+import stat
+import tarfile
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from museum_dev import lab as lab_module
+from museum_dev.credentials import PENDING, Credentials
 from museum_dev.lab import (
     MAX_INTERFACE_NAME,
     POOL,
@@ -34,6 +39,12 @@ MACHINE = Machine(
 )
 LAB = Lab((NETWORK,), (MACHINE,))
 TOPLEVEL = "/nix/store/abc-system"
+SUBNETS = {
+    "upstream": "198.18.0.0/24",
+    "museum_a": "198.18.1.0/24",
+    "museum_b": "198.18.2.0/24",
+    "vpn": "198.18.3.0/24",
+}
 
 
 class FakeVirsh:
@@ -129,18 +140,16 @@ class DescriptorTests(unittest.TestCase):
         self.assertEqual(client.memory_mib, 2048)
 
     def test_example_lab_matches_the_descriptor(self):
-        import json
-
         root = Path(lab_module.__file__).resolve().parents[3]
         example = json.loads((root / "dev/lab-example/lab.json").read_text())
-        subnets = {"upstream": "198.18.0.0/24", "museum_a": "198.18.1.0/24", "museum_b": "198.18.2.0/24"}
-        self.assertEqual(example, nix_spec(self.lab, subnets))
+        public = Credentials(Path("/nonexistent")).public(list(self.lab.machines))
+        self.assertEqual(example, nix_spec(self.lab, SUBNETS, public))
 
 
 class SubnetTests(unittest.TestCase):
     def test_allocates_free_distinct_subnets(self):
         subnets = allocate_subnets(load_lab({}), {}, {}, [])
-        self.assertEqual(len(set(subnets.values())), 3)
+        self.assertEqual(len(set(subnets.values())), 4)
 
     def test_skips_subnets_used_by_host_routes(self):
         subnets = allocate_subnets(LAB, {}, {}, [("198.18.0.0/24", "br0")])
@@ -158,6 +167,84 @@ class SubnetTests(unittest.TestCase):
 
     def test_host_address_keeps_the_prefix(self):
         self.assertEqual(host_address("198.18.1.0/24", 10), "198.18.1.10/24")
+
+
+class CredentialTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.credentials = Credentials(self.root / "credentials")
+        self.lab = load_lab({})
+        self.machines = {m.name: m for m in self.lab.machines}
+        self.credentials.ensure(list(self.lab.machines))
+
+    def bundle_names(self, name):
+        target = self.root / f"{name}.tar"
+        self.credentials.bundle(self.machines[name], target)
+        with tarfile.open(target) as archive:
+            return set(archive.getnames())
+
+    def test_directory_is_private(self):
+        self.assertEqual(stat.S_IMODE(self.credentials.directory.stat().st_mode), 0o700)
+
+    def test_museum_client_gets_no_credentials(self):
+        self.assertFalse(self.machines["dev-client"].has_secrets)
+        self.assertEqual(self.bundle_names("dev-client"), set())
+
+    def test_a_machine_only_gets_its_own_keys(self):
+        target = self.root / "gateway.tar"
+        self.credentials.bundle(self.machines["dev-gateway"], target)
+        with tarfile.open(target) as archive:
+            data = {m.name: archive.extractfile(m).read() for m in archive.getmembers()}
+        other = (self.credentials.directory / "dev-admin/vpn.key").read_bytes()
+        self.assertNotIn(other, data.values())
+        self.assertEqual(data["vpn.key"], (self.credentials.directory / "dev-gateway/vpn.key").read_bytes())
+
+    def test_the_ca_key_is_never_bundled(self):
+        for name in ("dev-gateway", "dev-nullray", "dev-admin"):
+            self.assertNotIn("ca.key", self.bundle_names(name))
+
+    def test_nothing_private_enters_the_nix_spec(self):
+        public = self.credentials.public(list(self.lab.machines))
+        spec = json.dumps(nix_spec(self.lab, SUBNETS, public))
+        self.assertNotIn("PRIVATE KEY", spec)
+        private = [*self.credentials.directory.rglob("*.key"), *self.credentials.directory.rglob("id_ed25519")]
+        self.assertTrue(private)
+        for path in private:
+            self.assertNotIn(path.read_text().strip(), spec)
+
+    def test_credentials_are_stable_across_runs(self):
+        before = self.credentials.public(list(self.lab.machines))
+        self.credentials.ensure(list(self.lab.machines))
+        self.assertEqual(before, self.credentials.public(list(self.lab.machines)))
+
+    def test_public_values_are_placeholders_until_generated(self):
+        public = Credentials(self.root / "none").public(list(self.lab.machines))
+        self.assertEqual(public["ca"], PENDING)
+
+    def test_only_listed_machines_are_authorized(self):
+        public = self.credentials.public(list(self.lab.machines))
+        spec = nix_spec(self.lab, SUBNETS, public)["machines"]
+        self.assertEqual(
+            set(spec["dev-gateway"]["authorizedKeys"]),
+            {public["identities"]["dev-nullray"], public["identities"]["dev-admin"]},
+        )
+        self.assertEqual(spec["dev-admin"]["authorizedKeys"], [])
+        self.assertEqual(spec["dev-client"]["authorizedKeys"], [])
+
+    def test_vpn_clients_have_fixed_addresses(self):
+        public = self.credentials.public(list(self.lab.machines))
+        server = nix_spec(self.lab, SUBNETS, public)["machines"]["dev-nullray"]["vpn"]
+        self.assertEqual(
+            server["clients"], {"dev-gateway": "198.18.3.2", "dev-admin": "198.18.3.3"}
+        )
+
+    def test_museum_client_has_no_vpn_configuration(self):
+        public = self.credentials.public(list(self.lab.machines))
+        client = nix_spec(self.lab, SUBNETS, public)["machines"]["dev-client"]
+        self.assertIsNone(client["vpn"])
+        self.assertEqual(client["knownHosts"], {})
 
 
 class IsolationTests(unittest.TestCase):
