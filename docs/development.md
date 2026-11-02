@@ -17,7 +17,7 @@ The lab runs on Ubuntu 26.04 x86-64. Host setup is two commands:
 | `--yes` | Skip the confirmation prompt |
 | `--optional` | Also install debugging aids |
 | `--test` | Also install test dependencies |
-| `--vintage` | Also install 86Box and what it needs |
+| `--vintage` | Also install 86Box and what it needs, including `vde-switch` |
 
 Log out and back in after `bootstrap` adds you to a group. `doctor` warns until the new membership is active.
 
@@ -55,7 +55,8 @@ virsh -c qemu:///system console museum-net-dev-gateway
 | `dev-nullray` | OpenVPN and SSH server, standing in for production `nullray` |
 | `dev-gateway` | Gateway, with a management NIC and two museum NICs |
 | `dev-admin` | Separate management client, connected through the VPN |
-| `dev-client` | Lightweight Linux client on a museum network |
+| `dev-client` | Lightweight Linux client on the first museum network |
+| `dev-client-b` | The same, on the second museum network |
 
 From inside a machine, SSH uses the `museum-admin` user and the lab's own key. For example, from `dev-admin`, where 198.18.3.2 stands for the gateway's VPN address:
 
@@ -67,6 +68,18 @@ Your lab's addresses are in `~/.local/share/museum-net/lab/subnets.json`.
 
 `up` generates a throwaway test CA and SSH keys in `~/.local/share/museum-net/lab/credentials/`. They persist between runs, and `destroy --disks` leaves them in place. Delete that directory and run `update` to replace them. Never use them outside the lab.
 
+## Museum services
+
+Both museum networks get read-only anonymous FTP on port 21, with passive data ports 2120-2139, and plain HTTP on port 80. From a client's console, where 198.18.1.1 stands for the gateway's museum address:
+
+```sh
+curl http://198.18.1.1/README.TXT
+curl ftp://198.18.1.1/README.TXT                  # passive
+curl --ftp-port - ftp://198.18.1.1/README.TXT     # active
+```
+
+In the lab, `/srv/archive` holds the fixture from `dev/fixtures/archive`, read-only. Run `umount /srv/archive` on the gateway to see how the services report a missing archive, and `systemctl start srv-archive.mount` to restore it.
+
 ## Management
 
 `dev-gateway` runs `museumd`, and `museumctl` talks to it over a Unix socket, so it works with every network interface down. From the gateway's console:
@@ -74,6 +87,7 @@ Your lab's addresses are in `~/.local/share/museum-net/lab/subnets.json`.
 ```sh
 museumctl status
 museumctl serial adapters                          # the modes this gateway accepts
+museumctl network list
 museumctl serial list
 museumctl serial set com1 --mode slip --baud 38400
 museumctl serial disable com1                      # keeps its line settings
@@ -99,11 +113,26 @@ nix --extra-experimental-features 'nix-command flakes' flake check --no-build
 
 Flakes only see files tracked by Git, so `git add` new files before evaluating.
 
-## 86Box ROMs
+## Emulated clients
 
-86Box is optional: gateway development and the required automated tests use lightweight Linux clients. Install it with `bootstrap --vintage` to run the DOS and Windows for Workgroups 3.11 clients under `dev/machines/`.
+Emulated clients are optional: gateway development and the required automated tests use lightweight Linux clients. Install 86Box with `bootstrap --vintage` to run the DOS and Windows for Workgroups 3.11 clients under `dev/machines/`.
 
-ROMs are user-supplied and never committed, as are installation media, licensed software, and installed disk images. Install a ROM set at `~/.local/share/museum-net/roms/`, or set `paths.roms` in the local config. `doctor` warns until it finds one.
+ROMs are user-supplied and never committed, as are installation media, licensed software, and installed disk images. Install a ROM set at `~/.local/share/museum-net/roms/`, or set `paths.roms` in the local config. `doctor` warns until it finds one. Disk images go in `~/.local/share/museum-net/clients/<name>/`, under the names `client list` shows.
+
+```sh
+./dev/scripts/up                 # the lab has to be running
+./dev/scripts/client list        # clients, their addresses, and what each is missing
+./dev/scripts/client start dos
+./dev/scripts/client stop dos
+```
+
+The first `start` uses `sudo` to create a TAP device and join it to the lab's bridge. The emulator itself runs without privileges. `start` refuses a TAP device attached to anything else. `stop` removes the TAP device.
+
+Each client has a fixed address on its museum network, which you set inside the guest. `client list` shows it. There's no DHCP, and the gateway's museum address is the same subnet's `.1`.
+
+Tracked configurations only name the machine. Choose the CPU, memory, video, and disk geometry in 86Box's settings the first time you run a client; they're kept in the client's directory. A client's network settings are rewritten on every start.
+
+To add a client, create a directory under `dev/machines/` with a `client.yaml`. Shared code discovers it, and a new emulator needs one class in `dev/lib/museum_dev/clients.py`.
 
 ## Local configuration
 

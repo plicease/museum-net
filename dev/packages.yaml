@@ -70,3 +70,5 @@ packages:
   vintage:
     - name: fuse3
       why: Provides fusermount, which the 86Box AppImage uses to mount itself
+    - name: vde-switch
+      why: Connects emulators to a lab bridge without giving them privileges

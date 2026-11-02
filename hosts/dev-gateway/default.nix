@@ -1,5 +1,23 @@
+{ pkgs, ... }:
 {
   imports = [ ../../modules/gateway.nix ];
+
+  museumNet.networking.interfaces = {
+    mgmt0 = "management";
+    tun-mgmt = "vpn";
+    museum0 = "museum";
+    museum1 = "museum";
+  };
+
+  fileSystems."/srv/archive" = {
+    device = "${pkgs.callPackage ../../dev/nixos/archive-fixture.nix { }}";
+    fsType = "none";
+    options = [
+      "bind"
+      "ro"
+      "nofail"
+    ];
+  };
 
   # Their devices arrive with the virtual serial lab; until then museumd only
   # stores their assignments.

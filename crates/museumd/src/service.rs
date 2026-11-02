@@ -1,5 +1,7 @@
 //! The operations behind every front end. Nothing here knows about sockets.
 
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use museum_core::config::{
@@ -7,7 +9,8 @@ use museum_core::config::{
 };
 use museum_core::inventory::Inventory;
 use museum_core::protocol::{
-    ApiError, ConfigView, ErrorCode, PortView, Reply, Request, Response, Status, Stored,
+    ApiError, ConfigView, ErrorCode, InterfaceView, PortView, Reply, Request, Response, Status,
+    Stored,
 };
 use tracing::{error, info, warn};
 
@@ -20,6 +23,7 @@ pub struct Service {
     inventory: Inventory,
     adapters: Vec<AdapterDescriptor>,
     current: Revision,
+    sys_class_net: PathBuf,
 }
 
 impl Service {
@@ -42,6 +46,7 @@ impl Service {
             inventory,
             adapters,
             current,
+            sys_class_net: PathBuf::from("/sys/class/net"),
         };
         for problem in service.problems() {
             warn!(%problem, "stored configuration has a problem");
@@ -64,6 +69,9 @@ impl Service {
             }),
             Request::SerialAdapters => Ok(Reply::Adapters {
                 adapters: self.adapters.clone(),
+            }),
+            Request::NetworkList => Ok(Reply::Interfaces {
+                interfaces: self.interfaces(),
             }),
             Request::SerialSet { port, change } => self.serial_set(peer, &port, change),
             Request::SerialDisable { port } => self.serial_disable(peer, &port),
@@ -104,6 +112,18 @@ impl Service {
                     state,
                     message,
                 }
+            })
+            .collect()
+    }
+
+    fn interfaces(&self) -> Vec<InterfaceView> {
+        self.inventory
+            .interfaces
+            .iter()
+            .map(|interface| InterfaceView {
+                name: interface.name.clone(),
+                zone: interface.zone,
+                state: operational_state(&self.sys_class_net, &interface.name),
             })
             .collect()
     }
@@ -245,6 +265,11 @@ fn with_port(config: &Config, name: &str, port: PortConfig) -> Config {
     config
 }
 
+fn operational_state(sys_class_net: &Path, interface: &str) -> String {
+    fs::read_to_string(sys_class_net.join(interface).join("operstate"))
+        .map_or_else(|_| "missing".to_owned(), |state| state.trim().to_owned())
+}
+
 fn now() -> String {
     humantime::format_rfc3339_seconds(SystemTime::now()).to_string()
 }
@@ -259,13 +284,15 @@ mod tests {
     use super::*;
     use crate::adapters;
     use crate::store::tests::scratch;
+    use museum_core::inventory::Zone;
     use museum_core::protocol::RuntimeState;
-    use std::fs;
-    use std::path::Path;
 
     const INVENTORY: &str = r#"{"version":1,"ports":[
         {"name":"com1","device":"/dev/a","kind":"virtual"},
-        {"name":"com2","device":"/dev/b","kind":"virtual"}]}"#;
+        {"name":"com2","device":"/dev/b","kind":"virtual"}],
+        "interfaces":[
+        {"name":"mgmt0","zone":"management"},
+        {"name":"museum0","zone":"museum"}]}"#;
 
     fn admin() -> Peer {
         Peer {
@@ -337,6 +364,31 @@ mod tests {
         };
         assert_eq!(changes[0].actor, "alice");
         assert_eq!(changes[0].action, "set com1 to slip 38400 8N1 flow none");
+    }
+
+    #[test]
+    fn interfaces_report_their_zone_and_the_kernel_state() {
+        let mut service = open(&scratch());
+        let sys = scratch();
+        fs::create_dir(sys.join("mgmt0")).unwrap();
+        fs::write(sys.join("mgmt0/operstate"), "up\n").unwrap();
+        service.sys_class_net = sys;
+
+        let Ok(Reply::Interfaces { interfaces }) = service.handle(&admin(), Request::NetworkList)
+        else {
+            panic!()
+        };
+        let states: Vec<_> = interfaces
+            .iter()
+            .map(|i| (i.name.as_str(), i.zone, i.state.as_str()))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("mgmt0", Zone::Management, "up"),
+                ("museum0", Zone::Museum, "missing")
+            ]
+        );
     }
 
     #[test]
@@ -483,7 +535,7 @@ mod tests {
         }
         let mut service = open_with(
             &dir,
-            r#"{"version":1,"ports":[{"name":"com1","device":"/dev/a","kind":"virtual"}]}"#,
+            r#"{"version":1,"ports":[{"name":"com1","device":"/dev/a","kind":"virtual"}],"interfaces":[]}"#,
         );
         let Ok(Reply::Validation { problems }) = service.handle(&admin(), Request::ConfigValidate)
         else {

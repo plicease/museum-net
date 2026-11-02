@@ -1,0 +1,14 @@
+# See "Vintage client emulation" in docs/DESIGN.md.
+version: 1
+description: Windows for Workgroups 3.11 on an IBM PS/2 Model 70
+guest: windows-for-workgroups-3.11
+emulator: 86box
+config: 86box.cfg
+network:
+  lab_network: museum_b
+  host: 20
+  card: ethernextmc
+assets:
+  - file: win311.img
+    description: Hard disk image with DOS 6.22, WfW 3.11, and TCP/IP installed
+capabilities: [ftp, http]

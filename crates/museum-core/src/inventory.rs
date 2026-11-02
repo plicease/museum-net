@@ -1,7 +1,8 @@
-//! The serial ports a gateway has. NixOS generates this; `museumd` only reads
+//! The serial ports and network interfaces a gateway has. NixOS generates this; `museumd` only reads
 //! it, so it can't assign a device the host doesn't declare.
 
 use std::collections::BTreeSet;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -13,6 +14,34 @@ pub const INVENTORY_VERSION: u32 = 1;
 pub struct Inventory {
     pub version: u32,
     pub ports: Vec<SerialPort>,
+    pub interfaces: Vec<NetworkInterface>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkInterface {
+    pub name: String,
+    pub zone: Zone,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Zone {
+    Management,
+    Museum,
+    Vpn,
+    Disabled,
+}
+
+impl fmt::Display for Zone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Zone::Management => "management",
+            Zone::Museum => "museum",
+            Zone::Vpn => "vpn",
+            Zone::Disabled => "disabled",
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,7 +110,9 @@ mod tests {
     use super::*;
 
     fn parse(ports: &str) -> Result<Inventory, InventoryError> {
-        Inventory::parse(&format!(r#"{{"version":1,"ports":[{ports}]}}"#))
+        Inventory::parse(&format!(
+            r#"{{"version":1,"ports":[{ports}],"interfaces":[]}}"#
+        ))
     }
 
     const COM1: &str = r#"{"name":"com1","device":"/dev/ttyS0","kind":"uart"}"#;
@@ -113,7 +144,7 @@ mod tests {
         let bad = r#"{"name":"../com1","device":"/dev/ttyS1","kind":"uart"}"#;
         assert!(matches!(parse(bad), Err(InventoryError::Name(_))));
         assert!(matches!(
-            Inventory::parse(r#"{"version":2,"ports":[]}"#),
+            Inventory::parse(r#"{"version":2,"ports":[],"interfaces":[]}"#),
             Err(InventoryError::Version(2))
         ));
     }

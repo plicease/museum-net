@@ -46,3 +46,9 @@ machines:
     disk_gib: 2
     interfaces:
       - { name: eth0, network: museum_a, host: 10 }
+  dev-client-b:
+    vcpus: 1
+    memory_mib: 512
+    disk_gib: 2
+    interfaces:
+      - { name: eth0, network: museum_b, host: 10 }

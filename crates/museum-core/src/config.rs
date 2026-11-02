@@ -228,7 +228,8 @@ mod tests {
         Inventory::parse(
             r#"{"version":1,"ports":[
                 {"name":"com1","device":"/dev/ttyS0","kind":"uart"},
-                {"name":"com2","device":"/dev/ttyS1","kind":"uart"}]}"#,
+                {"name":"com2","device":"/dev/ttyS1","kind":"uart"}],
+                "interfaces":[]}"#,
         )
         .unwrap()
     }

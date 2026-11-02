@@ -17,7 +17,8 @@ use nix::unistd::{Group, Uid, getgid};
 
 const INVENTORY: &str = r#"{"version":1,"ports":[
     {"name":"com1","device":"/dev/a","kind":"virtual"},
-    {"name":"com2","device":"/dev/b","kind":"virtual"}]}"#;
+    {"name":"com2","device":"/dev/b","kind":"virtual"}],
+    "interfaces":[]}"#;
 
 struct Daemon {
     child: Child,

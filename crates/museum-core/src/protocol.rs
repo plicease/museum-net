@@ -7,7 +7,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{AdapterDescriptor, Config, DISABLED, PortConfig, Problem, SerialChange};
-use crate::inventory::PortKind;
+use crate::inventory::{PortKind, Zone};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -28,6 +28,7 @@ pub enum Request {
     SerialAdapters,
     SerialSet { port: String, change: SerialChange },
     SerialDisable { port: String },
+    NetworkList,
     ConfigShow { revision: Option<u64> },
     ConfigValidate,
     ConfigHistory { limit: Option<usize> },
@@ -45,6 +46,7 @@ impl Request {
             Request::Status
             | Request::SerialList
             | Request::SerialAdapters
+            | Request::NetworkList
             | Request::ConfigShow { .. }
             | Request::ConfigValidate
             | Request::ConfigHistory { .. } => false,
@@ -60,6 +62,7 @@ pub enum Reply {
     Status(Status),
     Ports { ports: Vec<PortView> },
     Adapters { adapters: Vec<AdapterDescriptor> },
+    Interfaces { interfaces: Vec<InterfaceView> },
     Stored(Stored),
     Config(ConfigView),
     Validation { problems: Vec<Problem> },
@@ -100,6 +103,15 @@ impl PortView {
             None => self.desired.mode == DISABLED,
         }
     }
+}
+
+/// A declared network interface and what the kernel reports for it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterfaceView {
+    pub name: String,
+    pub zone: Zone,
+    /// The kernel's operational state, or `missing` if there's no such device.
+    pub state: String,
 }
 
 /// The state of the service that owns a port.

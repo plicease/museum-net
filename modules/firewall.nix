@@ -17,7 +17,14 @@
     content = ''
       chain input {
         type filter hook input priority filter - 10; policy accept;
+        iifname "museum*" meta nfproto ipv6 drop
         iifname "museum*" fib daddr . iif type != { local, broadcast, multicast } drop
+      }
+
+      # A gateway forwards nothing, whatever the sysctls above say. Any future
+      # exception has to be a narrow rule here.
+      chain forward {
+        type filter hook forward priority filter - 10; policy drop;
       }
     '';
   };

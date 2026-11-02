@@ -12,6 +12,7 @@ let
     builtins.toJSON {
       version = 1;
       ports = lib.mapAttrsToList (name: port: { inherit name; inherit (port) device kind; }) cfg.serialPorts;
+      interfaces = lib.mapAttrsToList (name: zone: { inherit name zone; }) config.museumNet.networking.interfaces;
     }
   );
 in
@@ -79,15 +80,16 @@ in
         StateDirectory = "museumd";
         StateDirectoryMode = "0700";
 
-        # museumd only talks to its socket and state so far. Adapters and the
-        # web portal will need some of this back.
+        # museumd only talks to its socket and state, and reads interface
+        # state from /sys. Adapters and the web portal will need some of this
+        # back.
         CapabilityBoundingSet = "";
         DevicePolicy = "closed";
         LockPersonality = true;
         MemoryDenyWriteExecute = true;
         NoNewPrivileges = true;
         PrivateDevices = true;
-        PrivateNetwork = true;
+        IPAddressDeny = "any";
         PrivateTmp = true;
         ProtectClock = true;
         ProtectControlGroups = true;

@@ -34,6 +34,9 @@ enum Command {
     /// Inspect and assign serial ports
     #[command(subcommand)]
     Serial(SerialCommand),
+    /// Inspect network interfaces
+    #[command(subcommand)]
+    Network(NetworkCommand),
     /// Inspect the configuration and its change log
     #[command(subcommand)]
     Config(ConfigCommand),
@@ -49,6 +52,12 @@ enum SerialCommand {
     Set(SetArgs),
     /// Store a port as disabled, keeping its line settings
     Disable { port: String },
+}
+
+#[derive(Subcommand)]
+enum NetworkCommand {
+    /// List interfaces, their zones, and their kernel state
+    List,
 }
 
 #[derive(Args)]
@@ -111,6 +120,7 @@ impl From<Command> for Request {
                 },
             },
             Command::Serial(SerialCommand::Disable { port }) => Request::SerialDisable { port },
+            Command::Network(NetworkCommand::List) => Request::NetworkList,
             Command::Config(ConfigCommand::Show { revision }) => Request::ConfigShow { revision },
             Command::Config(ConfigCommand::Validate) => Request::ConfigValidate,
             Command::Config(ConfigCommand::History { limit }) => {
@@ -187,6 +197,17 @@ fn print_reply(reply: &Reply) {
         Reply::Adapters { adapters } => {
             for adapter in adapters {
                 println!("{:<12} {}", adapter.name, adapter.description);
+            }
+        }
+        Reply::Interfaces { interfaces } => {
+            println!("{:<16} {:<12} STATE", "INTERFACE", "ZONE");
+            for interface in interfaces {
+                println!(
+                    "{:<16} {:<12} {}",
+                    interface.name,
+                    interface.zone.to_string(),
+                    interface.state
+                );
             }
         }
         Reply::Stored(stored) => {

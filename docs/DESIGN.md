@@ -88,7 +88,7 @@ Ubuntu host: athena / battlestation / onley
 
 The gateway VM should model **two assignable Ethernet NICs plus an optional third management/Wi-Fi surrogate**. Virtual interfaces test role changes; they do not reproduce actual wireless driver behavior. All lab networks are non-forwarding, not connected to physical NICs, and have no host NAT by default. VPN traffic stays within the virtual upstream network.
 
-Each lab network uses its own dedicated bridge, created and owned by the lab. Lab bridges are layer 2 only: they have no host address, so the host has no route into the lab. People reach machines through the libvirt console, and tests use the QEMU guest agent. Libvirt network names use the `museum-net-dev-` prefix; bridge device names need a shorter prefix such as `mnd-` because Linux limits interface names to 15 characters. The lab must never attach VMs, TAP devices, or emulators to existing host bridges (for example `virbr0`, `br0`, or Docker bridges) or to libvirt's `default` network. The 86Box TAP device joins the lab's museum bridge. `up` must fail rather than fall back to an existing bridge.
+Each lab network uses its own dedicated bridge, created and owned by the lab. Lab bridges are layer 2 only: they have no host address, so the host has no route into the lab. People reach machines through the libvirt console, and tests use the QEMU guest agent. Libvirt network names use the `museum-net-dev-` prefix; bridge device names need a shorter prefix such as `mnd-` because Linux limits interface names to 15 characters. The lab must never attach VMs, TAP devices, or emulators to existing host bridges (for example `virbr0`, `br0`, or Docker bridges) or to libvirt's `default` network. An emulator's TAP device joins the lab's museum bridge. `up` must fail rather than fall back to an existing bridge.
 
 Use distinct subnets for upstream, museum LAN(s), and VPN. Addresses must be configurable and collision-checked; examples in documentation must not become hard-coded defaults. `up` uses subnets from local configuration, otherwise it allocates free /24s from 198.18.0.0/15 and keeps them stable for that host.
 
@@ -142,6 +142,8 @@ All emulated clients are optional for the basic gateway development workflow and
 
 Machine configurations attach only to the lab's dedicated isolated museum Ethernet network and virtual serial bridges, never to existing host bridges.
 
+Emulators get no privileges, because they parse untrusted disk images. Root creates one TAP device for each client, owned by the user and joined to the lab's bridge, and `vde_switch` connects it to the emulator. This avoids 86Box's TAP backend, which needs `CAP_NET_ADMIN` and creates a bridge if the name it is given doesn't exist. The launcher rewrites the emulator's network settings on every start, so a saved setting can't move a machine off the lab.
+
 The client-launch and connectivity layer must not assume 86Box, x86 hardware, DOS or Windows, or a particular guest network stack:
 
 - **Client descriptor:** each client is described by its emulator/launcher, user-supplied assets (ROMs, OS images), network attachment (isolated museum Ethernet, SLIP, PPP), serial transport (PTY/TCP bridge), and supported test capabilities (FTP, HTTP, Sprocket, Interloper, and so on).
@@ -175,6 +177,8 @@ Model physical devices independently from logical network zones:
 - **Disabled/unassigned:** No service and no unintended forwarding.
 
 Default physical layout: wired NIC 1 = management, wired NIC 2 = museum LAN, Wi-Fi = disabled/optional management. Alternate layout: Wi-Fi = management, both wired NICs = museum LAN(s). A role change must be validated against policy and available recovery paths.
+
+Museum networks are IPv4 only: museum interfaces have no IPv6 addresses, and the firewall drops any IPv6 arriving on them. A gateway forwards nothing, whatever its sysctls say, so any future exception must be a narrow firewall rule.
 
 Gateway firewall must block museum clients from SSH, management HTTP(S), VPN endpoints, and other management services. It must block forwarding between museum, management, VPN, and physical upstream networks unless a narrowly scoped policy explicitly allows it. Cover IPv4 and IPv6, including bridging behavior; do not rely only on IP forwarding settings. Linux answers for any local address on any interface, so a museum interface accepts traffic only for its own addresses; otherwise a client that routes through the gateway could reach its management and VPN addresses with forwarding off.
 
@@ -256,7 +260,7 @@ museumctl config history
 museumctl config rollback <revision>
 ```
 
-M3 implements `status`, `serial`, and `config`, plus `serial adapters`, which lists the modes the daemon supports. `network`, `vpn`, and `archive` are design targets for the milestones that add their state. `clap` is a good fit for nested subcommands and shell completions. Avoid a fixed enum of all possible future serial protocols: the CLI should discover supported adapter names from the daemon.
+M3 implements `status`, `serial`, and `config`, plus `serial adapters`, which lists the modes the daemon supports. M4 adds `network list`, which shows each declared interface, its zone, and its kernel state. `vpn` and `archive` are design targets for the milestones that add their state. `clap` is a good fit for nested subcommands and shell completions. Avoid a fixed enum of all possible future serial protocols: the CLI should discover supported adapter names from the daemon.
 
 ## 8. Serial ports and protocol adapters
 
@@ -312,6 +316,8 @@ Both services expose the same archive tree. Archive traffic is permitted from mu
 Prefer established NixOS-packaged FTP/HTTP servers (e.g., vsftpd and a lightweight static server), not a custom Rust transfer server. Test vintage clients, active/passive FTP data channels, HTTP/1.0, and filenames. Filesystem permissions and mounts enforce read-only serving.
 
 Gateway boot, serial service, VPN, and management must work when archive media is absent. FTP/HTTP should report archive unavailable instead of silently serving an empty unrelated directory.
+
+The archive mounts at `/srv/archive`, served by vsftpd and nginx. A notice file sits in the mount point's own directory, so mounted media hides it and missing media shows it: HTTP answers 503, and FTP lists only the notice. Both services are restricted to museum interfaces by systemd as well as the firewall.
 
 ## 10. Archive mirroring and 1 TB USB distribution
 
@@ -494,7 +500,7 @@ Phases can overlap, but M0–M3 should establish the reproducible and manageable
 |---|---|
 | Physical interface identifiers | Inventory NIC, Wi-Fi, and UART identities on both gateways |
 | Default network addressing | Select non-conflicting production subnets and VPN IP allocation |
-| 86Box | Confirm ROM needs, TAP and serial configuration |
+| 86Box | Confirm ROM needs, serial configuration, and that the tracked machine configurations boot |
 | Protocol adapters | Verify Interloper/Sprocket invocation, image-serving semantics, and serial handoff |
 | DOS SLIP stack | Select compatible binaries and confirm redistribution rights |
 | Archive size | Measure actual archive against 1 TB USB capacity, filesystem overhead, and update headroom |

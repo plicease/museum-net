@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live test of the real lab: boot, isolation, VPN, SSH, management, lifecycle, and removal.
+"""Live test of the real lab: boot, isolation, VPN, SSH, management, archive, lifecycle, and removal.
 
 Needs KVM, libvirt, and Nix, so it is not part of the unit tests. It destroys
 the lab, including disks, when it finishes:
@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 URI = "qemu:///system"
 GATEWAY = "museum-net-dev-gateway"
 CLIENT = "museum-net-dev-client"
+CLIENT_B = "museum-net-dev-client-b"
 NULLRAY = "museum-net-dev-nullray"
 ADMIN = "museum-net-dev-admin"
 CREDENTIALS = Path.home() / ".local/share/museum-net/lab/credentials"
@@ -421,14 +422,19 @@ def test_management_service():
     check(socket == "660 root museum socket", "museumd socket is restricted to its group", socket)
     state = guest(GATEWAY, "stat -c '%a %U' /var/lib/museumd")[1].strip()
     check(state == "700 root", "museumd state is private", state)
-    listening = guest(
-        GATEWAY,
-        "nsenter -t $(systemctl show -p MainPID --value museumd) -n ip -o link show",
-    )[1]
+    sockets = guest(GATEWAY, "ss -H -tulnp; echo end")[1]
     check(
-        "lo:" in listening and "mgmt0" not in listening,
-        "museumd has no network interface",
-        listening,
+        "end" in sockets and "museumd" not in sockets,
+        "museumd has no network sockets",
+        sockets,
+    )
+    interfaces = {i["name"]: i for i in museumctl_json("network", "list")["interfaces"]}
+    check(
+        interfaces["museum0"]["zone"] == "museum"
+        and interfaces["museum0"]["state"] == "up"
+        and interfaces["mgmt0"]["zone"] == "management",
+        "museumctl lists interfaces with their zones and kernel state",
+        str(interfaces),
     )
 
     adapters = {a["name"] for a in museumctl_json("serial", "adapters")["adapters"]}
@@ -579,6 +585,189 @@ def test_management_without_network():
     )
 
 
+def museum_addresses():
+    """The gateway's address on each museum network, and each client's."""
+    a = subnets()["museum_a"].rsplit(".", 1)[0]
+    b = subnets()["museum_b"].rsplit(".", 1)[0]
+    return f"{a}.1", f"{b}.1", f"{a}.10", f"{b}.10"
+
+
+def sha256(domain, command):
+    return guest(domain, f"{command} | sha256sum")[1].split()[0]
+
+
+def ftp_session(domain, address, *commands):
+    """Speak raw FTP. Each command is sent after reading the previous reply."""
+    lines = "".join(f"printf '%s\\r\\n' {shlex.quote(c)} >&3; sleep 0.3; " for c in commands)
+    script = f"exec 3<>/dev/tcp/{address}/21; sleep 0.3; {lines}timeout 1 cat <&3"
+    return guest(domain, f"bash -c {shlex.quote(script)}")[1]
+
+
+def ftp_banner(domain, address):
+    script = f"exec 3<>/dev/tcp/{address}/21; head -n 1 <&3"
+    return guest(domain, f"timeout 4 bash -c {shlex.quote(script)}")[1]
+
+
+def test_archive_transfers():
+    gateway_a, gateway_b, _, _ = museum_addresses()
+    binary = "PUB/DOS/BINARY.BIN"
+    expected = sha256(GATEWAY, f"cat /srv/archive/{binary}")
+    for label, domain, address in (("A", CLIENT, gateway_a), ("B", CLIENT_B, gateway_b)):
+        for name, command in (
+            ("HTTP/1.1", f"curl -fsS http://{address}/{binary}"),
+            ("HTTP/1.0", f"curl -fsS --http1.0 http://{address}/{binary}"),
+            ("passive FTP", f"curl -fsS ftp://{address}/{binary}"),
+            ("active FTP", f"curl -fsS --ftp-port - ftp://{address}/{binary}"),
+        ):
+            check(sha256(domain, command) == expected, f"{name} gives identical bytes on LAN {label}")
+
+    for path, label in (
+        ("PUB/DOS/HELLO.TXT", "an 8.3 name"),
+        ("pub/long%20names/a%20file%20with%20spaces.txt", "a long name with spaces"),
+    ):
+        http = sha256(CLIENT, f"curl -fsS http://{gateway_a}/{path}")
+        ftp = sha256(CLIENT, f"curl -fsS ftp://{gateway_a}/{path}")
+        check(http == ftp, f"FTP and HTTP agree on {label}")
+
+    listing = guest(CLIENT, f"curl -fsS http://{gateway_a}/")[1]
+    check("README.TXT" in listing, "HTTP lists directories", listing)
+    check("<script" not in listing.lower(), "the HTTP listing needs no JavaScript")
+    listing = guest(CLIENT, f"curl -fsS --list-only ftp://{gateway_a}/")[1]
+    check("README.TXT" in listing, "FTP lists directories", listing)
+
+    bare = "GET /PUB HTTP/1.0\\r\\n\\r\\n"
+    reply = guest(
+        CLIENT,
+        f"bash -c 'exec 3<>/dev/tcp/{gateway_a}/80; printf \"{bare}\" >&3; timeout 2 cat <&3'",
+    )[1]
+    check(
+        f"Location: http://{gateway_a}/PUB/" in reply,
+        "a directory redirect works without a Host header",
+        reply,
+    )
+    reply = guest(CLIENT, f"curl -sS -o /dev/null -w '%{{http_code}}' -X PUT http://{gateway_a}/x")[1]
+    check(reply.strip() in ("403", "405"), "HTTP refuses writes", reply)
+    headers = guest(CLIENT, f"curl -sSI http://{gateway_a}/README.TXT")[1].lower()
+    check("https" not in headers, "HTTP has no TLS redirect or upgrade", headers)
+
+
+def test_archive_read_only():
+    gateway_a, _, _, _ = museum_addresses()
+    login = ("USER anonymous", "PASS guest@")
+    for command in ("STOR x", "MKD x", "DELE README.TXT", "RNFR README.TXT", "SITE CHMOD 777 README.TXT"):
+        reply = ftp_session(CLIENT, gateway_a, *login, "TYPE I", command, "QUIT")
+        check(
+            "230" in reply and not any(f"\n{c} " in reply for c in ("150", "226", "250", "257", "350")),
+            f"anonymous FTP refuses {command.split()[0]}",
+            reply,
+        )
+    reply = ftp_session(CLIENT, gateway_a, "USER root", "PASS root", "QUIT")
+    check("230" not in reply, "FTP refuses a local user", reply)
+    status = guest(GATEWAY, "touch /srv/archive/x")[0]
+    check(status != 0, "the archive mount is read-only")
+
+    # Without this, a client could make the gateway connect anywhere for it.
+    upstream = subnets()["upstream"].rsplit(".", 1)[0].replace(".", ",")
+    reply = ftp_session(CLIENT, gateway_a, *login, f"PORT {upstream},1,0,22", "LIST", "QUIT")
+    check("500" in reply and "150" not in reply, "FTP refuses a bounce to another host", reply)
+
+
+def test_archive_boundaries():
+    _, gateway, _ = vpn_addresses()
+    gateway_mgmt = subnets()["upstream"].rsplit(".", 1)[0] + ".2"
+    for port, name in ((21, "FTP"), (80, "HTTP"), (2120, "passive FTP")):
+        check(not tcp_open(ADMIN, gateway_mgmt, port), f"{name} is closed on the management address")
+        check(not tcp_open(ADMIN, gateway, port), f"{name} is closed over the VPN")
+
+    # Prove the services refuse those interfaces on their own, without the firewall.
+    guest(GATEWAY, "nft add rule inet nixos-fw input-allow tcp dport { 21, 80 } accept")
+    http = guest(ADMIN, f"timeout 4 curl -fsS -o /dev/null http://{gateway_mgmt}/README.TXT")[0]
+    banner = ftp_banner(ADMIN, gateway_mgmt)
+    guest(GATEWAY, "systemctl reload nftables || systemctl restart nftables")
+    check(http != 0, "HTTP doesn't answer on management even with the firewall open")
+    check("220" not in banner, "FTP doesn't answer on management even with the firewall open", banner)
+
+
+def test_archive_missing():
+    gateway_a, _, _, _ = museum_addresses()
+    guest(GATEWAY, "umount /srv/archive")
+    check(guest(GATEWAY, "mountpoint -q /srv/archive")[0] != 0, "the archive can be unmounted")
+
+    code = guest(CLIENT, f"curl -s -o /dev/null -w '%{{http_code}}' http://{gateway_a}/README.TXT")[1]
+    check(code.strip() == "503", "HTTP reports a missing archive", code)
+    listing = guest(CLIENT, f"curl -fsS --list-only ftp://{gateway_a}/")[1]
+    check("ARCHIVE-UNAVAILABLE.TXT" in listing, "FTP reports a missing archive", listing)
+    check(museumctl("status")[0] == 0, "management works without the archive")
+
+    guest(GATEWAY, "systemctl start srv-archive.mount")
+    check(
+        wait_until(lambda: guest(CLIENT, f"curl -fsS http://{gateway_a}/README.TXT")[0] == 0),
+        "HTTP recovers when the archive returns",
+    )
+    listing = guest(CLIENT, f"curl -fsS --list-only ftp://{gateway_a}/")[1]
+    check(
+        "README.TXT" in listing and "UNAVAILABLE" not in listing,
+        "the notice is hidden while the archive is mounted",
+        listing,
+    )
+
+
+def test_archive_during_vpn_outage():
+    gateway_a, _, _, _ = museum_addresses()
+    _, gateway, _ = vpn_addresses()
+    guest(NULLRAY, "systemctl stop openvpn-management")
+    check(wait_until(lambda: not vpn_reachable(), 90), "the VPN is down for this test")
+    check(guest(CLIENT, f"curl -fsS -o /dev/null http://{gateway_a}/README.TXT")[0] == 0,
+          "HTTP works during a VPN outage")
+    check(guest(CLIENT, f"curl -fsS -o /dev/null ftp://{gateway_a}/README.TXT")[0] == 0,
+          "FTP works during a VPN outage")
+    guest(NULLRAY, "systemctl start openvpn-management")
+    check(wait_until(lambda: tunnel_up(GATEWAY, gateway), 90), "the VPN returns after the outage")
+
+
+def vpn_reachable():
+    server = vpn_addresses()[0]
+    return reachable(GATEWAY, server)
+
+
+def test_forwarding():
+    gateway_a, gateway_b, client_a, client_b = museum_addresses()
+    admin = subnets()["upstream"].rsplit(".", 1)[0] + ".3"
+    guest(CLIENT, f"ip route add {client_b}/32 via {gateway_a}; ip route add {admin}/32 via {gateway_a}")
+    guest(CLIENT_B, f"ip route add {client_a}/32 via {gateway_b}")
+    guest(GATEWAY, "sysctl -w net.ipv4.ip_forward=1")
+    check(not reachable(CLIENT, client_b), "the firewall stops museum A reaching museum B")
+    check(not reachable(CLIENT_B, client_a), "the firewall stops museum B reaching museum A")
+    check(not reachable(CLIENT, admin), "the firewall stops a museum client reaching upstream")
+    dropped = guest(GATEWAY, "sysctl -w net.ipv4.ip_forward=0")[0]
+    check(dropped == 0, "forwarding is switched back off")
+    guest(CLIENT, f"ip route del {client_b}/32; ip route del {admin}/32")
+    guest(CLIENT_B, f"ip route del {client_a}/32")
+
+
+def test_ipv6():
+    addresses = guest(GATEWAY, "ip -6 -br addr show museum0; ip -6 -br addr show museum1")[1]
+    check("fe80" not in addresses, "museum interfaces have no IPv6 addresses", addresses)
+    neighbours = guest(CLIENT, "ping -6 -c 2 -w 3 ff02::1%eth0 2>&1")[1]
+    check("DUP" not in neighbours, "only the client answers link-local multicast", neighbours)
+
+    # The firewall has to hold even if an address appears.
+    guest(GATEWAY, "ip -6 addr add fd4d::1/64 dev museum0 nodad")
+    guest(CLIENT, "ip -6 addr add fd4d::2/64 dev eth0 nodad")
+    time.sleep(1)
+    check(not reachable(CLIENT, "fd4d::1"), "the firewall drops IPv6 to the gateway")
+    check(
+        guest(CLIENT, "timeout 4 curl -fsS -o /dev/null http://[fd4d::1]/README.TXT")[0] != 0,
+        "archive HTTP isn't reachable over IPv6",
+    )
+    check(
+        guest(CLIENT, "timeout 4 bash -c 'exec 3<>/dev/tcp/fd4d::1/22'")[0] != 0,
+        "SSH isn't reachable over IPv6",
+    )
+    guest(GATEWAY, "ip -6 addr del fd4d::1/64 dev museum0")
+    guest(CLIENT, "ip -6 addr del fd4d::2/64 dev eth0")
+
+
 def test_lifecycle(before):
     output = script("update", "--dry-run")
     check("Nothing to do" in output, "update --dry-run finds nothing to do", output)
@@ -626,6 +815,7 @@ def main():
     print(script("up"))
     wait_for_boot(GATEWAY)
     wait_for_boot(CLIENT)
+    wait_for_boot(CLIENT_B)
     wait_for_boot(NULLRAY)
     wait_for_boot(ADMIN)
     test_host_side()
@@ -641,6 +831,13 @@ def main():
     test_management_history()
     test_management_durability()
     test_management_without_network()
+    test_archive_transfers()
+    test_archive_read_only()
+    test_archive_boundaries()
+    test_archive_missing()
+    test_archive_during_vpn_outage()
+    test_forwarding()
+    test_ipv6()
     test_lifecycle(before)
     print(f"\n{len(failures)} failed")
     return 1 if failures else 0

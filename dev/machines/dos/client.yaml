@@ -1,0 +1,14 @@
+# See "Vintage client emulation" in docs/DESIGN.md.
+version: 1
+description: MS-DOS, the primary serial target, with FTP and HTTP over Ethernet
+guest: ms-dos
+emulator: 86box
+config: 86box.cfg
+network:
+  lab_network: museum_a
+  host: 20
+  card: wd8003e
+assets:
+  - file: dos.img
+    description: Hard disk image with MS-DOS and a packet driver installed
+capabilities: [ftp, http]
