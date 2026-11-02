@@ -1,0 +1,13 @@
+# Tools that are not available from Ubuntu's repositories. `tier` has the same
+# meaning as in packages.yaml. bootstrap installs these into a user-owned directory and verifies them against sha256.
+# Never edit a pin without downloading the artifact and checking its hash.
+version: 1
+
+tools:
+  86box:
+    version: "6.0"
+    url: https://github.com/86Box/86Box/releases/download/v6.0/86Box-Linux-x86_64-b9001.AppImage
+    sha256: 535d3c329f8c32b601103970c86d80aa80298f345452c3524ea2f433624727a4
+    filename: 86Box.AppImage
+    tier: vintage
+    why: Primary vintage PC emulator for the lab; optional for gateway development

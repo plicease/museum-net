@@ -1,0 +1,13 @@
+#!/bin/sh
+# Lab lifecycle. See dev/lib/museum_dev/lab.py.
+set -eu
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+# shellcheck source=dev/lib/python.sh
+. "$root/dev/lib/python.sh"
+
+if ! python_ready; then
+    echo 'down: needs Python 3.11+ with PyYAML; run ./dev/scripts/bootstrap' >&2
+    exit 1
+fi
+run_python lab down "$@"

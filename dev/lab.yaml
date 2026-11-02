@@ -1,0 +1,54 @@
+# The virtual lab. Shared orchestration reads this file and never names a
+# specific machine or network. `host` is the address offset within the subnet.
+# `ssh_from` lists the machines whose keys this machine's SSH server accepts.
+version: 1
+
+networks:
+  upstream:
+    bridge: mnd-upstream
+  museum_a:
+    bridge: mnd-museum-a
+  museum_b:
+    bridge: mnd-museum-b
+
+vpn:
+  subnet: vpn
+
+machines:
+  dev-nullray:
+    vcpus: 1
+    memory_mib: 512
+    disk_gib: 2
+    vpn: { role: server, host: 1 }
+    ssh_from: [dev-gateway]
+    interfaces:
+      - { name: mgmt0, network: upstream, host: 1 }
+  dev-admin:
+    vcpus: 1
+    memory_mib: 512
+    disk_gib: 2
+    vpn: { role: client, host: 3 }
+    interfaces:
+      - { name: mgmt0, network: upstream, host: 3 }
+  dev-gateway:
+    vcpus: 2
+    memory_mib: 1024
+    disk_gib: 4
+    vpn: { role: client, host: 2 }
+    ssh_from: [dev-nullray, dev-admin]
+    interfaces:
+      - { name: mgmt0, network: upstream, host: 2 }
+      - { name: museum0, network: museum_a, host: 1 }
+      - { name: museum1, network: museum_b, host: 1 }
+  dev-client:
+    vcpus: 1
+    memory_mib: 512
+    disk_gib: 2
+    interfaces:
+      - { name: eth0, network: museum_a, host: 10 }
+  dev-client-b:
+    vcpus: 1
+    memory_mib: 512
+    disk_gib: 2
+    interfaces:
+      - { name: eth0, network: museum_b, host: 10 }

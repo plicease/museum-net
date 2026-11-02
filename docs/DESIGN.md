@@ -75,7 +75,7 @@ Ubuntu host: athena / battlestation / onley
  +-- isolated upstream/management virtual network
  |     +-- dev-nullray (NixOS): OpenVPN server, SSH
  |     +-- dev-gateway (NixOS): OpenVPN client, SSH, museumd
- |     +-- optional management test client
+ |     +-- dev-admin (NixOS): separate management client over the VPN
  |
  +-- isolated museum Ethernet network
  |     +-- dev-gateway museum NIC
@@ -88,7 +88,9 @@ Ubuntu host: athena / battlestation / onley
 
 The gateway VM should model **two assignable Ethernet NICs plus an optional third management/Wi-Fi surrogate**. Virtual interfaces test role changes; they do not reproduce actual wireless driver behavior. All lab networks are non-forwarding, not connected to physical NICs, and have no host NAT by default. VPN traffic stays within the virtual upstream network.
 
-Use distinct subnets for upstream, museum LAN(s), and VPN. Addresses must be configurable and collision-checked; examples in documentation must not become hard-coded defaults.
+Each lab network uses its own dedicated bridge, created and owned by the lab. Lab bridges are layer 2 only: they have no host address, so the host has no route into the lab. People reach machines through the libvirt console, and tests use the QEMU guest agent. Libvirt network names use the `museum-net-dev-` prefix; bridge device names need a shorter prefix such as `mnd-` because Linux limits interface names to 15 characters. The lab must never attach VMs, TAP devices, or emulators to existing host bridges (for example `virbr0`, `br0`, or Docker bridges) or to libvirt's `default` network. An emulator's TAP device joins the lab's museum bridge. `up` must fail rather than fall back to an existing bridge.
+
+Use distinct subnets for upstream, museum LAN(s), and VPN. Addresses must be configurable and collision-checked; examples in documentation must not become hard-coded defaults. `up` uses subnets from local configuration, otherwise it allocates free /24s from 198.18.0.0/15 and keeps them stable for that host.
 
 ## 4. Portable Ubuntu development environment
 
@@ -113,15 +115,45 @@ The development environment supports:
 - `update` reconciles generated definitions and NixOS configurations; supports dry-run and preserves mutable state.
 - `destroy` only removes explicitly owned resources, with separate confirmation for destructive disk deletion.
 
-Use a resource prefix such as `museum-net-dev-` and record ownership to avoid deleting other libvirt assets. All scripts support `--help`, clear exit statuses, and actionable diagnostics.
+`dev/lab.yaml` describes the lab's networks and machines; shared orchestration does not name them. Lab VMs boot directly from a NixOS kernel and initrd, and mount the host's Nix store read-only, so no disk image is built and a configuration change only needs a restart. Machine disks hold mutable state only.
+
+Use the `museum-net-dev-` resource prefix and an ownership marker in each definition to avoid deleting other libvirt assets. All scripts support `--help`, clear exit statuses, and actionable diagnostics.
 
 ### Dependency policy
 
-Prefer Ubuntu 26.04 APT packages. Candidate packages to validate against the actual release: `qemu-system-x86`, `qemu-utils`, `libvirt-daemon-system`, `libvirt-clients`, `virtinst`, `socat`, `iproute2`, `python3`, `git`, `curl`, `ca-certificates`, `jq`, plus optional `virt-manager`, `tcpdump`, `dnsutils`, and `netcat-openbsd`. The dependency manifest distinguishes required, optional, and test-only packages and records why each is needed.
+Prefer Ubuntu 26.04 APT packages. Candidate packages to validate against the actual release: `qemu-system-x86`, `qemu-utils`, `libvirt-daemon-system`, `libvirt-clients`, `virtinst`, `socat`, `iproute2`, `python3`, `git`, `curl`, `ca-certificates`, `jq`, plus optional `virt-manager`, `tcpdump`, `bind9-dnsutils`, and `netcat-openbsd`. The dependency manifest distinguishes required, optional, and test-only packages and records why each is needed.
 
-Nix installation/build workflow must be explicit and documented; `flake.lock` pins NixOS inputs. Do not silently execute downloaded installers.
+Nix installation/build workflow must be explicit and documented; `flake.lock` pins NixOS inputs. Do not silently execute downloaded installers. Hosts use Ubuntu's `nix-bin` and `nix-setup-systemd` packages.
 
 86Box is managed separately when not available through the supported Ubuntu repositories: use a verified upstream Linux artifact, pinned version and SHA-256; install into a user-owned tools directory. Do not invent release filenames or checksums. Firmware ROMs and operating-system images are user-supplied and excluded from the repository.
+
+### Vintage client emulation
+
+The lab exercises real period-appropriate clients as well as modern Linux tools. DOS and Windows 3.11 under 86Box are the initial clients, not the permanent set: Macintosh, Unix, CP/M, Apple II, and other systems are expected later.
+
+| Environment | Machine configuration | Purpose |
+|---|---|---|
+| MS-DOS | `dev/machines/dos/` | Primary serial-protocol target: Interloper bootstrap, Sprocket, SLIP/PPP, and subsequent FTP/HTTP access |
+| Windows for Workgroups 3.11 | `dev/machines/win311/` | Additional compatibility target: emulated Ethernet and serial networking, WinSock/TCP/IP applications, historical FTP clients, and early HTTP browsers such as Mosaic and Netscape. Reflects the physical IBM PS/2 Model 70 running DOS 6.22 and Windows 3.11 |
+
+Git tracks emulator machine configuration only. ROMs, operating-system installation media, licensed software, and installed disk images are never committed; users supply them locally.
+
+All emulated clients are optional for the basic gateway development workflow and ordinary CI. Lightweight Linux clients carry the mandatory automated service and isolation tests; emulated clients cover historical compatibility through manual or opt-in integration tests. Windows testing stays manual until a repeatable guest-side test harness exists.
+
+Machine configurations attach only to the lab's dedicated isolated museum Ethernet network and virtual serial bridges, never to existing host bridges.
+
+Emulators get no privileges, because they parse untrusted disk images. Root creates one TAP device for each client, owned by the user and joined to the lab's bridge, and `vde_switch` connects it to the emulator. This avoids 86Box's TAP backend, which needs `CAP_NET_ADMIN` and creates a bridge if the name it is given doesn't exist. The launcher rewrites the emulator's network settings on every start, so a saved setting can't move a machine off the lab.
+
+The lab owns these resources for their whole lifetime, however a client ended. `down` and `destroy` find them from what the system reports, not from anything a session recorded, so a killed client is cleaned up too. A TAP is the lab's only if it has the lab's prefix and marker and belongs to the user running the command. Its owner can remove it without privileges, and the kernel refuses anyone else.
+
+The client-launch and connectivity layer must not assume 86Box, x86 hardware, DOS or Windows, or a particular guest network stack:
+
+- **Client descriptor:** each client is described by its emulator/launcher, user-supplied assets (ROMs, OS images), network attachment (isolated museum Ethernet, SLIP, PPP), serial transport (PTY/TCP bridge), and supported test capabilities (FTP, HTTP, Sprocket, Interloper, and so on).
+- **Common emulator interface:** emulator-specific launch and configuration logic sits behind a common interface. Network and serial infrastructure is reusable by 86Box, QEMU, Mini vMac/Basilisk II, MAME, and future emulators where their capabilities permit.
+- **Emulator and guest are separate:** one emulator can host several guests, and one guest may be supported through more than one emulator.
+- **No hard-coded clients:** shared orchestration discovers clients from their descriptors rather than naming `dos` or `win311`. Paths may later be grouped by platform, such as `dev/machines/pc/dos/` and `dev/machines/mac/system6/`.
+
+New clients are added incrementally, and stay out of the mandatory bootstrap and CI paths.
 
 ### Local state
 
@@ -129,7 +161,8 @@ Nix installation/build workflow must be explicit and documented; `flake.lock` pi
 |---|---|
 | Git repository | NixOS modules, Rust source, provisioning, manifests, tests |
 | `~/.config/museum-net/` | Local paths, subnet overrides, RAM/disk choices |
-| `~/.local/share/museum-net/` | VM disks, ROMs, emulator state, external tools |
+| `~/.local/share/museum-net/` | ROMs, emulator state, external tools, allocated lab subnets, throwaway lab credentials |
+| `/var/lib/libvirt/museum-net-dev/` | VM disks and boot files, in a lab-owned libvirt pool that QEMU can read |
 | `~/.cache/museum-net/` | Download/build cache |
 | Managed libvirt instance | Generated VM/network definitions |
 
@@ -147,7 +180,11 @@ Model physical devices independently from logical network zones:
 
 Default physical layout: wired NIC 1 = management, wired NIC 2 = museum LAN, Wi-Fi = disabled/optional management. Alternate layout: Wi-Fi = management, both wired NICs = museum LAN(s). A role change must be validated against policy and available recovery paths.
 
-Gateway firewall must block museum clients from SSH, management HTTP(S), VPN endpoints, and other management services. It must block forwarding between museum, management, VPN, and physical upstream networks unless a narrowly scoped policy explicitly allows it. Cover IPv4 and IPv6, including bridging behavior; do not rely only on IP forwarding settings.
+Museum networks are IPv4 only: museum interfaces have no IPv6 addresses, and the firewall drops any IPv6 arriving on them. A gateway forwards nothing, whatever its sysctls say, so any future exception must be a narrow firewall rule.
+
+Static addressing keeps working in every configuration. DHCP is a planned, optional museum-facing service for emulated and physical vintage Ethernet clients, in addition to static addressing rather than instead of it. It is configured per museum network, so each can have its own range or none, and leases must not offer a default route, DNS server, or other path toward management or upstream networks unless a narrow policy allows it. Its server answers only on museum interfaces, restricted as the archive services are, and is covered by the same negative tests. DHCP doesn't apply to SLIP or PPP clients.
+
+Gateway firewall must block museum clients from SSH, management HTTP(S), VPN endpoints, and other management services. It must block forwarding between museum, management, VPN, and physical upstream networks unless a narrowly scoped policy explicitly allows it. Cover IPv4 and IPv6, including bridging behavior; do not rely only on IP forwarding settings. Linux answers for any local address on any interface, so a museum interface accepts traffic only for its own addresses; otherwise a client that routes through the gateway could reach its management and VPN addresses with forwarding off.
 
 For remote network reconfiguration, use a timed commit/confirm/rollback mechanism. Preserve local console and Unix-socket management even when all network interfaces are misconfigured.
 
@@ -155,7 +192,9 @@ For remote network reconfiguration, use a timed commit/confirm/rollback mechanis
 
 Production gateways initiate OpenVPN connections to Debian `nullray` using separate per-gateway credentials. The gateway should have a predictable VPN IP, permit SSH over that IP, and optionally permit the authenticated management portal over the VPN. The VPN must reconnect automatically and must **not** provide a default route or forwarding path for vintage clients.
 
-`dev-nullray` is a small NixOS VM that emulates the **observable OpenVPN and SSH behavior** of production `nullray`; it does not need to replicate Debian internals. It runs an OpenVPN server, SSH server, isolated test PKI, and appropriate routing/firewall rules. Never reuse production VPN keys or silently connect development gateways to production.
+`dev-nullray` is a small NixOS VM that emulates the **observable OpenVPN and SSH behavior** of production `nullray`; it does not need to replicate Debian internals. It runs an OpenVPN server, SSH server, isolated test PKI, and appropriate routing/firewall rules. Never reuse production VPN keys or silently connect development gateways to production. `modules/vpn.nix` has no default server, so a host only reaches a VPN it is explicitly configured for.
+
+Only clients the server lists can connect, and each gets a fixed address. All lab VMs can read the shared Nix store, so private keys never enter it: `up` generates throwaway credentials on the host and gives each machine only its own, on a read-only disk. Museum clients get none.
 
 Integration tests must verify:
 - Tunnel establishment and expected address assignment.
@@ -194,9 +233,15 @@ The local CLI communicates through a Unix socket, so it works even with no Ether
 
 Use Unix permissions and explicit authorization for mutations. Do not run an unrestricted shell command constructed from web/CLI input. Keep a durable change log and provide rollback.
 
+The socket is `root:museum` mode 0660, so `museum` group membership decides who can read. Changes also need root or the `museum-admin` group, which `museumd` checks against the kernel-reported peer for each connection. Every front end calls the same operations, which know nothing about their transport, so the portal can't drift from the CLI.
+
+Each revision is a complete, schema-versioned snapshot in its own file, and the highest number is current. A revision is fully on disk before it takes its final name, so a crash leaves the previous one current. Revisions are never rewritten: a rollback is a new revision, and can itself be rolled back. A damaged or newer-schema current revision stops `museumd` from starting, because running on an older configuration would silently undo a change.
+
+A change is refused if it adds a problem, and existing problems don't block it. So when a port leaves the inventory, its stale entry is reported but other ports can still be changed.
+
 ### Configuration ownership
 
-- NixOS: packages, base firewall boundaries, service units/templates, stable interface identification, OpenVPN, management infrastructure.
+- NixOS: packages, base firewall boundaries, service units/templates, stable interface identification, serial port inventory, OpenVPN, management infrastructure.
 - `museumd`: validated runtime serial assignments, baud rates, logical zone mappings within allowed policies, enabled service instances, archive selection/status.
 - Changes must survive reboot, have schema versions, and be applied transactionally where possible.
 - Changing a serial mode should not require rebuilding NixOS; changing foundational security policy may require a NixOS deployment.
@@ -219,7 +264,7 @@ museumctl config history
 museumctl config rollback <revision>
 ```
 
-These are **design targets**, not implemented commands. `clap` is a good fit for nested subcommands and shell completions. Avoid a fixed enum of all possible future serial protocols: the CLI should discover supported adapter names from the daemon.
+M3 implements `status`, `serial`, and `config`, plus `serial adapters`, which lists the modes the daemon supports. M4 adds `network list`, which shows each declared interface, its zone, and its kernel state. `vpn` and `archive` are design targets for the milestones that add their state. `clap` is a good fit for nested subcommands and shell completions. Avoid a fixed enum of all possible future serial protocols: the CLI should discover supported adapter names from the daemon.
 
 ## 8. Serial ports and protocol adapters
 
@@ -234,7 +279,30 @@ Each gateway has two serial ports, independently assignable to:
 | Interloper | Bootstrap/disk-image delivery service |
 | Future adapter | Additional protocols without redesigning management |
 
-A serial port has one exclusive owner at a time. The adapter contract should support `validate`, `start`, `stop`, `status`, and capability/configuration discovery. Transition: validate new settings → stop old service → release device → start new service → health check → commit or restore old configuration. Persist failures and diagnostics.
+A serial port has one exclusive owner at a time. The adapter contract should support `validate`, `start`, `stop`, `status`, and capability/configuration discovery. Changing owner follows the activation contract below. Persist failures and diagnostics.
+
+### Activation
+
+Accepting a configuration and activating it are separate, and no API or interface may present one as the other:
+
+| Concept | Meaning |
+|---|---|
+| Desired configuration | The validated, durable revision the operator requested |
+| Active configuration | What the service controller has actually applied to the port |
+| Runtime status | Whether the owning service is stopped, starting, running, stopping, unhealthy, or failed, with a message |
+
+A change's reply reports that the desired configuration is stored, and lists the ports that aren't doing what it asks. M3 has no service controller, so every port is stopped with no active configuration, and a port assigned a mode is reported as stored but not active.
+
+The controller added with the adapters follows this contract:
+
+1. Validate the change and durably commit it as the desired configuration, so a crash mid-transition can be recovered.
+2. Reconcile only the ports whose desired and active configurations differ, one transition per port at a time.
+3. Stop the old owner and confirm the device is released before starting anything, so a port never has two owners.
+4. Start the new service, health-check it, and only then report it active.
+5. If activation fails, stop the new service, restart the previous active configuration, and commit a new revision by `museumd` restoring it, recording the failure and its diagnostics. If the previous configuration can't be restored either, leave the port stopped and report it failed.
+6. At startup, adopt services that already match the desired configuration, and reconcile the rest. Restarting `museumd` doesn't disturb a healthy port.
+
+Clients wait for the outcome of a transition, up to a timeout, and report failure with a nonzero exit.
 
 Serial configuration includes stable device identity, baud, framing/flow control as appropriate, mode-specific settings, and optional user-facing connected-machine label. Distinguish physical UART behavior from virtual PTY/TCP emulation; test real hardware before claiming parity.
 
@@ -252,6 +320,8 @@ Both services expose the same archive tree. Archive traffic is permitted from mu
 Prefer established NixOS-packaged FTP/HTTP servers (e.g., vsftpd and a lightweight static server), not a custom Rust transfer server. Test vintage clients, active/passive FTP data channels, HTTP/1.0, and filenames. Filesystem permissions and mounts enforce read-only serving.
 
 Gateway boot, serial service, VPN, and management must work when archive media is absent. FTP/HTTP should report archive unavailable instead of silently serving an empty unrelated directory.
+
+The archive mounts at `/srv/archive`, served by vsftpd and nginx. A notice file sits in the mount point's own directory, so mounted media hides it and missing media shows it: HTTP answers 503, and FTP lists only the notice. Both services are restricted to museum interfaces by systemd as well as the firewall.
 
 ## 10. Archive mirroring and 1 TB USB distribution
 
@@ -322,7 +392,7 @@ Test image contents and file accessibility in 86Box, then on real XT/PS/2 hardwa
 museum-net/
   README.md
   docs/
-    design.md
+    DESIGN.md
     security.md
     development.md
   flake.nix
@@ -419,7 +489,7 @@ Source code and declarative configuration are tracked; generated VM images, prop
 | M1 | Isolated KVM/libvirt lab with NixOS `dev-gateway` and test client |
 | M2 | NixOS `dev-nullray`, OpenVPN client/server, SSH-over-VPN tests |
 | M3 | Rust `museum-core`, `museumd`, local `museumctl`, persisted config |
-| M4 | Museum Ethernet, 86Box client, firewall and local FTP/HTTP fixtures |
+| M4 | Museum Ethernet, lightweight Linux test client, firewall and local FTP/HTTP fixtures, opt-in 86Box clients |
 | M5 | Virtual serial adapters: SLIP, PPP, Sprocket, Interloper |
 | M6 | `museum-mirror`, 1 TB USB build/update/import, archive serving |
 | M7 | Reproducible non-bootable DOS Interloper bootstrap image |
@@ -433,15 +503,15 @@ Phases can overlap, but M0–M3 should establish the reproducible and manageable
 | Topic | Decision still needed |
 |---|---|
 | Physical interface identifiers | Inventory NIC, Wi-Fi, and UART identities on both gateways |
-| Default network addressing | Select non-conflicting configurable subnets and VPN IP allocation |
-| Nix bootstrap | Choose a documented, reproducible host-side Nix install/build method |
-| 86Box | Confirm current Linux distribution format, ROM needs, TAP and serial configuration |
+| Default network addressing | Select non-conflicting production subnets and VPN IP allocation |
+| 86Box | Confirm ROM needs, serial configuration, and that the tracked machine configurations boot |
 | Protocol adapters | Verify Interloper/Sprocket invocation, image-serving semantics, and serial handoff |
 | DOS SLIP stack | Select compatible binaries and confirm redistribution rights |
 | Archive size | Measure actual archive against 1 TB USB capacity, filesystem overhead, and update headroom |
 | Mirror update consistency | Design crash-safe incremental updates without requiring full duplicate storage |
 | Production VPN | Confirm `nullray` OpenVPN addressing, routes, PKI, and SSH authorization |
-| Management authentication | Choose local authorization and HTTPS/authentication approach for web management only |
+| Museum DHCP | Choose the server, per-network configuration, and which milestone delivers it (§5); static addressing stays supported |
+| Management authentication | Choose HTTPS and authentication for web management; local authorization is decided (§7) |
 | Archive HTTP/FTP | Choose packaged servers and validate vintage compatibility |
 | Serial hardware | Verify physical UART capabilities and handshaking on `twintwist`/`topspin` |
 

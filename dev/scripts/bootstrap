@@ -1,0 +1,55 @@
+#!/bin/sh
+# Installs host dependencies. See dev/lib/museum_dev/bootstrap.py.
+set -eu
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+# shellcheck source=dev/lib/python.sh
+. "$root/dev/lib/python.sh"
+
+if ! python_ready; then
+    # The planner is Python, so its own dependencies are installed from here.
+    packages='python3 python3-yaml'
+    dry_run=no
+    assume_yes=no
+    for arg in "$@"; do
+        case $arg in
+        --dry-run) dry_run=yes ;;
+        --yes) assume_yes=yes ;;
+        esac
+    done
+
+    if [ "$(id -u)" -eq 0 ]; then
+        echo 'bootstrap: run this as your own user; it uses sudo where needed' >&2
+        exit 1
+    fi
+    echo "bootstrap needs Python first and will: sudo: install APT packages: $packages"
+    if [ "$dry_run" = yes ]; then
+        echo 'Dry run: nothing changed. The full plan appears once Python is installed.'
+        exit 0
+    fi
+    if [ "$assume_yes" = no ]; then
+        if [ ! -t 0 ]; then
+            echo 'bootstrap: no terminal to confirm on; rerun with --yes' >&2
+            exit 1
+        fi
+        printf 'Proceed? [y/N] '
+        read -r answer
+        case $answer in
+        y | Y | yes) ;;
+        *)
+            echo 'Nothing changed.'
+            exit 1
+            ;;
+        esac
+    fi
+
+    sudo apt-get update
+    # shellcheck disable=SC2086 # the package list is meant to split
+    sudo env DEBIAN_FRONTEND=noninteractive \
+        apt-get install -y --no-install-recommends $packages
+    if ! python_ready; then
+        echo 'bootstrap: /usr/bin/python3 is still older than 3.11 or lacks PyYAML' >&2
+        exit 1
+    fi
+fi
+run_python bootstrap "$@"
