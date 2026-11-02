@@ -7,7 +7,7 @@ An emulator reaches the lab through a TAP device that root creates once, owned
 by the user, and joins to the lab's bridge. The emulator itself needs no
 privileges, which matters because it parses untrusted disk images: 86Box's own
 TAP backend would need CAP_NET_ADMIN, and creates a bridge if the name it is
-given doesn't exist.
+given doesn't exist. See client_network.py for how these are removed.
 """
 
 from __future__ import annotations
@@ -17,8 +17,7 @@ import configparser
 import getpass
 import ipaddress
 import json
-import os
-import signal
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -27,12 +26,20 @@ from typing import Protocol
 
 import yaml
 
+from .client_network import (
+    SWITCH,
+    SWITCH_SOCKET,
+    TAP_MARKER,
+    TAP_PREFIX,
+    ClientNetworkError,
+    client_switches,
+    owned_taps,
+    remove_tap,
+    stop_switch,
+)
 from .common import REPO_ROOT, Paths, load_config, load_tools
 from .lab import MAX_INTERFACE_NAME, Lab, load_lab
 from .libvirt import Virsh
-
-TAP_PREFIX = "mnc-"
-
 
 class ClientError(RuntimeError):
     pass
@@ -184,41 +191,40 @@ def tap_master(tap: str, sys_class_net: Path = Path("/sys/class/net")) -> str | 
 def attach_commands(tap: str, bridge: str, user: str) -> list[list[str]]:
     return [
         ["sudo", "ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", user],
-        ["sudo", "ip", "link", "set", tap, "master", bridge, "up"],
+        ["sudo", "ip", "link", "set", tap, "master", bridge, "alias", TAP_MARKER, "up"],
     ]
 
 
-def ensure_tap(client: Client, bridge: str, run=subprocess.run) -> None:
+def detach(client: Client, state: Path, data: Path) -> None:
+    switch = client_switches(data).get(state / SWITCH_SOCKET)
+    if switch is not None:
+        stop_switch(switch)
+    if client.tap in owned_taps():
+        remove_tap(client.tap)
+
+
+def ensure_tap(
+    client: Client, bridge: str, state: Path, data: Path, run=subprocess.run
+) -> None:
     master = tap_master(client.tap)
     if master == bridge:
         return
-    if master is not None:
+    if master is not None and client.tap not in owned_taps():
         attached = f"attached to {master}" if master else "not attached to a bridge"
-        raise ClientError(f"{client.tap} exists but is {attached}: expected {bridge}")
+        raise ClientError(f"{client.tap} isn't ours and is {attached}: expected {bridge}")
+    # Ours but stale, such as after the lab's bridge was removed.
+    detach(client, state, data)
     for command in attach_commands(client.tap, bridge, getpass.getuser()):
         print(" ".join(command))
         run(command, check=True)
 
 
-def switch_pid(state: Path) -> int | None:
-    try:
-        pid = int((state / "vde.pid").read_text())
-        os.kill(pid, 0)
-    except (OSError, ValueError):
-        return None
-    return pid
-
-
-def ensure_switch(client: Client, state: Path, run=subprocess.run) -> Path:
-    socket = state / "vde"
-    if switch_pid(state) is None:
-        run(
-            [
-                "vde_switch", "--daemon", "--tap", client.tap,
-                "--sock", str(socket), "--pidfile", str(state / "vde.pid"),
-            ],
-            check=True,
-        )
+def ensure_switch(client: Client, state: Path, data: Path, run=subprocess.run) -> Path:
+    socket = state / SWITCH_SOCKET
+    if socket not in client_switches(data):
+        # A killed switch leaves this behind, and a new one won't reuse it.
+        shutil.rmtree(socket, ignore_errors=True)
+        run([SWITCH, "--daemon", "--tap", client.tap, "--sock", str(socket)], check=True)
     return socket
 
 
@@ -260,21 +266,14 @@ def command_start(client: Client, lab: Lab, paths: Paths, config: dict) -> int:
         raise ClientError("\n".join(problems))
     bridge = lab_bridge(lab, client, Virsh())
     state.mkdir(parents=True, exist_ok=True)
-    ensure_tap(client, bridge)
-    socket = ensure_switch(client, state)
+    ensure_tap(client, bridge, state, paths.data)
+    socket = ensure_switch(client, state, paths.data)
     emulator.write_config(client, state, socket, paths)
     return subprocess.run(emulator.command(client, state, paths, config), check=False).returncode
 
 
 def command_stop(client: Client, paths: Paths) -> int:
-    state = state_dir(client, paths)
-    pid = switch_pid(state)
-    if pid is not None:
-        os.kill(pid, signal.SIGTERM)
-    if tap_master(client.tap) is not None:
-        command = ["sudo", "ip", "link", "del", client.tap]
-        print(" ".join(command))
-        subprocess.run(command, check=True)
+    detach(client, state_dir(client, paths), paths.data)
     return 0
 
 
@@ -303,7 +302,7 @@ def main() -> int:
         if args.command == "start":
             return command_start(client, load_lab(config), paths, config)
         return command_stop(client, paths)
-    except (ClientError, subprocess.CalledProcessError, OSError) as error:
+    except (ClientError, ClientNetworkError, subprocess.CalledProcessError, OSError) as error:
         print(f"client: {error}", file=sys.stderr)
         return 1
 

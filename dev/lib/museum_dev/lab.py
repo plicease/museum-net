@@ -21,6 +21,7 @@ from typing import Callable
 
 import yaml
 
+from . import client_network
 from .common import REPO_ROOT, Host, Paths, find_subnet_problems, load_config
 from .credentials import Credentials
 from .libvirt import LibvirtError, Virsh
@@ -618,9 +619,13 @@ def command_up(args: argparse.Namespace) -> int:
 
 def command_down(args: argparse.Namespace) -> int:
     virsh = Virsh()
-    lab = load_lab(load_config(Paths.from_env()))
+    paths = Paths.from_env()
+    lab = load_lab(load_config(paths))
     Reconciler(lab, virsh, None, Host()).check_ownership()
     stop_machines(lab, virsh)
+    # Stopping a network removes its bridge, which strands anything attached.
+    for name in client_network.cleanup(paths.data):
+        print(f"  removed {name}")
     existing = virsh.networks()
     for network in lab.networks:
         if network.libvirt_name in existing and virsh.network_active(network.libvirt_name):
@@ -668,17 +673,19 @@ def confirmed(prompt: str, assume_yes: bool) -> bool:
 
 def command_destroy(args: argparse.Namespace) -> int:
     virsh = Virsh()
-    lab = load_lab(load_config(Paths.from_env()))
+    paths = Paths.from_env()
+    lab = load_lab(load_config(paths))
     Reconciler(lab, virsh, None, Host()).check_ownership()
 
     domains = virsh.domains() & {machine.domain for machine in lab.machines}
     networks = virsh.networks() & {network.libvirt_name for network in lab.networks}
     print("destroy will remove:")
-    for name in sorted(domains | networks):
+    for name in sorted(domains | networks) + client_network.leftovers(paths.data):
         print(f"  {name}")
     if not confirmed("Remove these lab resources? Disks are kept.", args.yes):
         print("Nothing changed.")
         return 1
+    client_network.cleanup(paths.data)
     for machine in lab.machines:
         if machine.domain in domains:
             if virsh.domain_running(machine.domain):

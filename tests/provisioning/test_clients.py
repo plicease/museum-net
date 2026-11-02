@@ -4,13 +4,21 @@ Run from the repository root:
     PYTHONPATH=dev/lib python3 -m unittest discover -s tests/provisioning
 """
 
+import argparse
 import configparser
+import contextlib
+import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from museum_dev import client_network
 from museum_dev import clients as module
+from museum_dev import lab as lab_module
+from museum_dev.client_network import TAP_MARKER
 from museum_dev.clients import (
     Asset,
     Box86,
@@ -134,7 +142,11 @@ class Tap(unittest.TestCase):
     def test_commands_only_touch_the_named_tap_and_lab_bridge(self):
         commands = attach_commands("mnc-retro", "mnd-museum-a", "user")
         self.assertIn("user", commands[0])
-        self.assertEqual(commands[1][-3:], ["master", "mnd-museum-a", "up"])
+        self.assertEqual(commands[1][5:7], ["master", "mnd-museum-a"])
+
+    def test_a_new_tap_carries_the_ownership_marker(self):
+        commands = attach_commands("mnc-retro", "mnd-museum-a", "user")
+        self.assertIn(TAP_MARKER, commands[1])
 
     def sysfs(self, directory, master=None):
         device = Path(directory) / "mnc-retro"
@@ -162,14 +174,131 @@ class Tap(unittest.TestCase):
         self.with_master("virbr0")
         calls = []
         with self.assertRaisesRegex(ClientError, "virbr0"):
-            ensure_tap(make_client("/"), "mnd-museum-a", run=lambda *a, **k: calls.append(a))
+            ensure_tap(
+                make_client("/"), "mnd-museum-a", Path("/x"), Path("/y"),
+                run=lambda *a, **k: calls.append(a),
+            )
         self.assertEqual(calls, [])
 
     def test_an_attached_tap_is_left_alone(self):
         self.with_master("mnd-museum-a")
         calls = []
-        ensure_tap(make_client("/"), "mnd-museum-a", run=lambda *a, **k: calls.append(a))
+        ensure_tap(
+            make_client("/"), "mnd-museum-a", Path("/x"), Path("/y"),
+            run=lambda *a, **k: calls.append(a),
+        )
         self.assertEqual(calls, [])
+
+    def test_our_stranded_tap_is_replaced(self):
+        self.with_master("")
+        removed, calls = [], []
+        for name, value in (
+            ("owned_taps", lambda: ["mnc-retro"]),
+            ("remove_tap", removed.append),
+            ("client_switches", lambda data: {}),
+        ):
+            self.addCleanup(setattr, module, name, getattr(module, name))
+            setattr(module, name, value)
+        with contextlib.redirect_stdout(io.StringIO()):
+            ensure_tap(
+                make_client("/"), "mnd-museum-a", Path("/x"), Path("/y"),
+                run=lambda *a, **k: calls.append(a),
+            )
+        self.assertEqual(removed, ["mnc-retro"])
+        self.assertEqual(len(calls), 2)
+
+
+class Ownership(unittest.TestCase):
+    """Against a fake /sys. tests/nixos/lab_live.py covers the real kernel."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+
+    def device(self, name, alias=TAP_MARKER, owner=1000, tun=True):
+        device = self.root / name
+        device.mkdir()
+        (device / "ifalias").write_text(f"{alias}\n")
+        (device / "owner").write_text(f"{owner}\n")
+        if tun:
+            (device / "tun_flags").write_text("0x1002\n")
+
+    def owned(self):
+        return client_network.owned_taps(self.root, uid=1000)
+
+    def test_a_marked_tap_of_this_user_is_ours(self):
+        self.device("mnc-dos")
+        self.assertEqual(self.owned(), ["mnc-dos"])
+
+    def test_everything_else_is_left_alone(self):
+        self.device("mnc-unmarked", alias="")
+        self.device("mnc-other-user", owner=1001)
+        self.device("mnc-not-a-tap", tun=False)
+        self.device("virbr0")
+        self.device("tap0")
+        self.assertEqual(self.owned(), [])
+
+    def process(self, proc, pid, *arguments, uid=None):
+        entry = proc / str(pid)
+        entry.mkdir()
+        (entry / "cmdline").write_bytes("\0".join(arguments).encode() + b"\0")
+        return entry
+
+    def test_only_client_switches_are_found(self):
+        proc = self.root / "proc"
+        proc.mkdir()
+        data = self.root / "data"
+        socket = data / "clients" / "dos" / "vde"
+        self.process(proc, 10, "/usr/bin/vde_switch", "--daemon", "--sock", str(socket))
+        self.process(proc, 11, "vde_switch", "--sock", "/tmp/someone-elses")
+        self.process(proc, 12, "vde_switch", "--sock", str(data / "other" / "x" / "vde"))
+        self.process(proc, 13, "not_a_switch", "--sock", str(socket))
+        (proc / "self").mkdir()
+        switches = client_network.client_switches(data, proc, uid=os.getuid())
+        self.assertEqual(switches, {socket: 10})
+
+    def test_another_users_switch_is_not_found(self):
+        proc = self.root / "proc"
+        proc.mkdir()
+        data = self.root / "data"
+        socket = data / "clients" / "dos" / "vde"
+        self.process(proc, 10, "vde_switch", "--sock", str(socket))
+        self.assertEqual(client_network.client_switches(data, proc, uid=os.getuid() + 1), {})
+
+
+class LabLifecycle(unittest.TestCase):
+    def run_command(self, command, **arguments):
+        calls = []
+        patches = {
+            "Virsh": lambda: mock.MagicMock(
+                networks=lambda: set(), domains=lambda: set(), pools=lambda: set()
+            ),
+            "Reconciler": mock.MagicMock(),
+        }
+        with mock.patch.multiple(lab_module, **patches), mock.patch.object(
+            lab_module.client_network, "leftovers", return_value=["mnc-dos"]
+        ), mock.patch.object(
+            lab_module.client_network, "cleanup", side_effect=lambda data: calls.append(data) or []
+        ), contextlib.redirect_stdout(io.StringIO()) as output:
+            status = command(argparse.Namespace(**arguments))
+        return status, calls, output.getvalue()
+
+    def test_destroy_lists_and_removes_abandoned_sessions(self):
+        status, calls, output = self.run_command(lab_module.command_destroy, yes=True, disks=False)
+        self.assertEqual(status, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("mnc-dos", output)
+
+    def test_declining_destroy_removes_nothing(self):
+        with mock.patch.object(lab_module, "confirmed", return_value=False):
+            status, calls, _ = self.run_command(lab_module.command_destroy, yes=False, disks=False)
+        self.assertEqual(status, 1)
+        self.assertEqual(calls, [])
+
+    def test_down_cleans_up_because_it_removes_the_bridges(self):
+        _, calls, _ = self.run_command(lab_module.command_down)
+        self.assertEqual(len(calls), 1)
 
 
 class Box86Config(unittest.TestCase):

@@ -768,6 +768,76 @@ def test_ipv6():
     guest(CLIENT, "ip -6 addr del fd4d::2/64 dev eth0")
 
 
+def test_client_cleanup():
+    """Run the real cleanup code as an unprivileged user in a VM, where root can
+    stage devices that the host could only make with sudo."""
+    user = "lab-tester"
+    home = f"/home/{user}"
+    data = f"{home}/data"
+    module = (ROOT / "dev/lib/museum_dev/client_network.py").read_bytes()
+    put_file(CLIENT, f"{home}/client_network.py", module)
+    marker = "museum-net-dev-client"
+
+    def as_user(command):
+        return guest(CLIENT, f"runuser -u {user} -- bash -c {shlex.quote(command)}")
+
+    def exists(name):
+        return guest(CLIENT, f"test -e /sys/class/net/{name}")[0] == 0
+
+    def switches():
+        return guest(CLIENT, "pgrep -c -x vde_switch")[1].strip()
+
+    def tap(name, owner, mark=True):
+        guest(CLIENT, f"ip tuntap add dev {name} mode tap user {owner}")
+        attach = f"ip link set {name} master mnd-test up"
+        guest(CLIENT, f"{attach} alias {marker}" if mark else attach)
+
+    python = f"cd {home} && python3 -c \"from pathlib import Path; import client_network as c; "
+    guest(CLIENT, f"chown {user} {home}/client_network.py; ip link add mnd-test type bridge")
+    tap("mnc-abandoned", user)
+    tap("mnc-live", user)
+    tap("mnc-orphan", user)
+    tap("mnc-foreign", "root")
+    tap("mnc-unmarked", user, mark=False)
+    guest(CLIENT, f"ip link add mnc-dummy type dummy; ip link set mnc-dummy alias {marker}")
+    guest(CLIENT, "ip link add unrelated0 type dummy")
+
+    start = "vde_switch --daemon --tap {tap} --sock {sock}"
+    as_user(f"mkdir -p {data}/clients/abandoned {data}/clients/live")
+    as_user(start.format(tap="mnc-abandoned", sock=f"{data}/clients/abandoned/vde"))
+    as_user(start.format(tap="mnc-live", sock=f"{data}/clients/live/vde"))
+    # This switch has nothing to do with the lab, and has to survive.
+    as_user(f"mkdir -p {home}/elsewhere; vde_switch --daemon --sock {home}/elsewhere/vde")
+    check(switches() == "3", "three switches are running for the cleanup test", switches())
+
+    # An interrupted session: its switch dies and leaves everything behind.
+    guest(CLIENT, f"pkill -KILL -f 'vde_switch.*{data}/clients/abandoned'")
+    check(exists("mnc-abandoned"), "a killed session leaves its TAP behind")
+    leftover = as_user(f"test -d {data}/clients/abandoned/vde")[0] == 0
+    check(leftover, "a killed session leaves its socket directory behind")
+
+    status, output = as_user(
+        python + f"print(c.cleanup(Path('{data}')))\" 2>&1"
+    )
+    check(status == 0, "cleanup runs as an unprivileged user", output)
+    for name in ("mnc-abandoned", "mnc-live", "mnc-orphan"):
+        check(not exists(name), f"cleanup removes {name}", output)
+    check(not as_user(f"test -d {data}/clients/abandoned/vde")[0] == 0, "cleanup removes stale sockets")
+    for name in ("mnc-foreign", "mnc-unmarked", "mnc-dummy", "unrelated0", "mnd-test"):
+        check(exists(name), f"cleanup leaves {name} alone", output)
+    check(switches() == "1", "cleanup leaves an unrelated switch running", switches())
+
+    status, output = as_user(python + "c.remove_tap('mnc-foreign')\" 2>&1")
+    check(status != 0 and "mnc-foreign" in output, "the kernel refuses another user's TAP", output)
+    check(exists("mnc-foreign"), "the other user's TAP survives a direct attempt")
+
+    status, output = as_user(python + f"print(c.cleanup(Path('{data}')))\" 2>&1")
+    check(status == 0 and output.strip() == "[]", "a second cleanup finds nothing to do", output)
+
+    guest(CLIENT, "pkill -x vde_switch; ip link del mnc-foreign; ip link del mnc-unmarked")
+    guest(CLIENT, "ip link del mnc-dummy; ip link del unrelated0; ip link del mnd-test")
+
+
 def test_lifecycle(before):
     output = script("update", "--dry-run")
     check("Nothing to do" in output, "update --dry-run finds nothing to do", output)
@@ -838,6 +908,7 @@ def main():
     test_archive_during_vpn_outage()
     test_forwarding()
     test_ipv6()
+    test_client_cleanup()
     test_lifecycle(before)
     print(f"\n{len(failures)} failed")
     return 1 if failures else 0

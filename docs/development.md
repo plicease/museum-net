@@ -126,9 +126,11 @@ ROMs are user-supplied and never committed, as are installation media, licensed 
 ./dev/scripts/client stop dos
 ```
 
-The first `start` uses `sudo` to create a TAP device and join it to the lab's bridge. The emulator itself runs without privileges. `start` refuses a TAP device attached to anything else. `stop` removes the TAP device.
+The first `start` uses `sudo` to create a TAP device and join it to the lab's bridge. The emulator itself runs without privileges. `stop` removes the TAP device and its `vde_switch`, without `sudo`. `down` and `destroy` do the same for every client, including one that was killed or never stopped, and `destroy` lists them first. An emulator that's still running loses its network but keeps running.
 
-Each client has a fixed address on its museum network, which you set inside the guest. `client list` shows it. There's no DHCP, and the gateway's museum address is the same subnet's `.1`.
+Those commands only remove what the lab made: a TAP needs the `mnc-` prefix and the lab's marker, and has to belong to you. `start` refuses a TAP with that name that isn't the lab's.
+
+Each client has a fixed address on its museum network, which you set inside the guest. `client list` shows it. There's no DHCP yet, and the gateway's museum address is the same subnet's `.1`.
 
 Tracked configurations only name the machine. Choose the CPU, memory, video, and disk geometry in 86Box's settings the first time you run a client; they're kept in the client's directory. A client's network settings are rewritten on every start.
 

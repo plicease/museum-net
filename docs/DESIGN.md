@@ -144,6 +144,8 @@ Machine configurations attach only to the lab's dedicated isolated museum Ethern
 
 Emulators get no privileges, because they parse untrusted disk images. Root creates one TAP device for each client, owned by the user and joined to the lab's bridge, and `vde_switch` connects it to the emulator. This avoids 86Box's TAP backend, which needs `CAP_NET_ADMIN` and creates a bridge if the name it is given doesn't exist. The launcher rewrites the emulator's network settings on every start, so a saved setting can't move a machine off the lab.
 
+The lab owns these resources for their whole lifetime, however a client ended. `down` and `destroy` find them from what the system reports, not from anything a session recorded, so a killed client is cleaned up too. A TAP is the lab's only if it has the lab's prefix and marker and belongs to the user running the command. Its owner can remove it without privileges, and the kernel refuses anyone else.
+
 The client-launch and connectivity layer must not assume 86Box, x86 hardware, DOS or Windows, or a particular guest network stack:
 
 - **Client descriptor:** each client is described by its emulator/launcher, user-supplied assets (ROMs, OS images), network attachment (isolated museum Ethernet, SLIP, PPP), serial transport (PTY/TCP bridge), and supported test capabilities (FTP, HTTP, Sprocket, Interloper, and so on).
@@ -179,6 +181,8 @@ Model physical devices independently from logical network zones:
 Default physical layout: wired NIC 1 = management, wired NIC 2 = museum LAN, Wi-Fi = disabled/optional management. Alternate layout: Wi-Fi = management, both wired NICs = museum LAN(s). A role change must be validated against policy and available recovery paths.
 
 Museum networks are IPv4 only: museum interfaces have no IPv6 addresses, and the firewall drops any IPv6 arriving on them. A gateway forwards nothing, whatever its sysctls say, so any future exception must be a narrow firewall rule.
+
+Static addressing keeps working in every configuration. DHCP is a planned, optional museum-facing service for emulated and physical vintage Ethernet clients, in addition to static addressing rather than instead of it. It is configured per museum network, so each can have its own range or none, and leases must not offer a default route, DNS server, or other path toward management or upstream networks unless a narrow policy allows it. Its server answers only on museum interfaces, restricted as the archive services are, and is covered by the same negative tests. DHCP doesn't apply to SLIP or PPP clients.
 
 Gateway firewall must block museum clients from SSH, management HTTP(S), VPN endpoints, and other management services. It must block forwarding between museum, management, VPN, and physical upstream networks unless a narrowly scoped policy explicitly allows it. Cover IPv4 and IPv6, including bridging behavior; do not rely only on IP forwarding settings. Linux answers for any local address on any interface, so a museum interface accepts traffic only for its own addresses; otherwise a client that routes through the gateway could reach its management and VPN addresses with forwarding off.
 
@@ -506,6 +510,7 @@ Phases can overlap, but M0–M3 should establish the reproducible and manageable
 | Archive size | Measure actual archive against 1 TB USB capacity, filesystem overhead, and update headroom |
 | Mirror update consistency | Design crash-safe incremental updates without requiring full duplicate storage |
 | Production VPN | Confirm `nullray` OpenVPN addressing, routes, PKI, and SSH authorization |
+| Museum DHCP | Choose the server, per-network configuration, and which milestone delivers it (§5); static addressing stays supported |
 | Management authentication | Choose HTTPS and authentication for web management; local authorization is decided (§7) |
 | Archive HTTP/FTP | Choose packaged servers and validate vintage compatibility |
 | Serial hardware | Verify physical UART capabilities and handshaking on `twintwist`/`topspin` |
