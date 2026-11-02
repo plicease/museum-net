@@ -7,10 +7,11 @@ use museum_core::config::{
 };
 use museum_core::inventory::Inventory;
 use museum_core::protocol::{
-    ApiError, Applied, ConfigView, ErrorCode, PortView, Reply, Request, Response, Status,
+    ApiError, ConfigView, ErrorCode, PortView, Reply, Request, Response, Status, Stored,
 };
 use tracing::{error, info, warn};
 
+use crate::adapters::{Observed, observe};
 use crate::auth::Peer;
 use crate::store::{Revision, Store, StoreError};
 
@@ -87,11 +88,22 @@ impl Service {
         self.inventory
             .ports
             .iter()
-            .map(|port| PortView {
-                name: port.name.clone(),
-                device: port.device.clone(),
-                kind: port.kind,
-                config: self.current.config.port(&port.name),
+            .map(|port| {
+                let desired = self.current.config.port(&port.name);
+                let Observed {
+                    active,
+                    state,
+                    message,
+                } = observe(&desired);
+                PortView {
+                    name: port.name.clone(),
+                    device: port.device.clone(),
+                    kind: port.kind,
+                    desired,
+                    active,
+                    state,
+                    message,
+                }
             })
             .collect()
     }
@@ -179,14 +191,11 @@ impl Service {
         self.store.read(revision).map_err(internal)
     }
 
-    /// Validate and persist a new configuration. In-memory state only changes
-    /// after the revision is on disk.
+    /// Validate and persist a new desired configuration, which doesn't activate
+    /// anything. In-memory state only changes after the revision is on disk.
     fn commit(&mut self, peer: &Peer, action: String, config: Config) -> Response {
         if config == self.current.config {
-            return Ok(Reply::Applied(Applied {
-                revision: self.current.change.revision,
-                changed: false,
-            }));
+            return Ok(self.stored(false));
         }
         let problems = config.new_problems(&self.current.config, &self.inventory, &self.adapters);
         if !problems.is_empty() {
@@ -208,10 +217,19 @@ impl Service {
             "committed"
         );
         self.current = record;
-        Ok(Reply::Applied(Applied {
+        Ok(self.stored(true))
+    }
+
+    fn stored(&self, changed: bool) -> Reply {
+        Reply::Stored(Stored {
             revision: self.current.change.revision,
-            changed: true,
-        }))
+            changed,
+            pending: self
+                .ports()
+                .into_iter()
+                .filter(|port| !port.activated())
+                .collect(),
+        })
     }
 }
 
@@ -241,6 +259,7 @@ mod tests {
     use super::*;
     use crate::adapters;
     use crate::store::tests::scratch;
+    use museum_core::protocol::RuntimeState;
     use std::fs;
     use std::path::Path;
 
@@ -279,9 +298,9 @@ mod tests {
         }
     }
 
-    fn applied(response: Response) -> Applied {
+    fn applied(response: Response) -> Stored {
         match response.unwrap() {
-            Reply::Applied(applied) => applied,
+            Reply::Stored(stored) => stored,
             other => panic!("{other:?}"),
         }
     }
@@ -298,7 +317,7 @@ mod tests {
             service
                 .ports()
                 .iter()
-                .all(|port| port.config.mode == DISABLED)
+                .all(|port| port.desired.mode == DISABLED)
         );
     }
 
@@ -318,6 +337,29 @@ mod tests {
         };
         assert_eq!(changes[0].actor, "alice");
         assert_eq!(changes[0].action, "set com1 to slip 38400 8N1 flow none");
+    }
+
+    #[test]
+    fn a_stored_change_reports_the_port_as_not_active() {
+        let mut service = open(&scratch());
+        let stored = applied(service.handle(&admin(), set("com1", "slip", 38400)));
+        assert!(stored.changed);
+        assert_eq!(stored.pending.len(), 1);
+
+        let port = &stored.pending[0];
+        assert_eq!(port.name, "com1");
+        assert_eq!(port.desired.mode, "slip");
+        assert_eq!(port.active, None);
+        assert_eq!(port.state, RuntimeState::Stopped);
+        assert!(port.message.as_deref().unwrap().contains("not active"));
+
+        let disabled = applied(service.handle(
+            &admin(),
+            Request::SerialDisable {
+                port: "com1".to_owned(),
+            },
+        ));
+        assert!(disabled.pending.is_empty());
     }
 
     #[test]

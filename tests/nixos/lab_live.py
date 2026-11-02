@@ -406,9 +406,13 @@ def current_revision():
     return museumctl_json("status")["current"]["revision"]
 
 
-def serial_port(name):
+def port_view(name):
     ports = museumctl_json("serial", "list")["ports"]
-    return next(port["config"] for port in ports if port["name"] == name)
+    return next(port for port in ports if port["name"] == name)
+
+
+def serial_port(name):
+    return port_view(name)["desired"]
 
 
 def test_management_service():
@@ -448,6 +452,19 @@ def test_management_service():
         "--label", "PS/2 Model 70", user="museum-admin",
     )
     check(status == 0, "an admin can assign the other port", output)
+    check(
+        "stored as revision" in output and "not active" in output,
+        "museumctl reports a stored change, not an active one",
+        output,
+    )
+    port = port_view("com1")
+    check(
+        port["active"] is None and port["state"] == "stopped",
+        "a stored mode is not reported as active",
+        str(port),
+    )
+    listing = museumctl("serial", "list")[1]
+    check("not active" in listing, "serial list says the port is not active", listing)
     check(serial_port("com2") == before, "changing com1 leaves com2 alone")
     assigned = serial_port("com1")
     check(

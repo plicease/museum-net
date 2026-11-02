@@ -271,7 +271,30 @@ Each gateway has two serial ports, independently assignable to:
 | Interloper | Bootstrap/disk-image delivery service |
 | Future adapter | Additional protocols without redesigning management |
 
-A serial port has one exclusive owner at a time. The adapter contract should support `validate`, `start`, `stop`, `status`, and capability/configuration discovery. Transition: validate new settings → stop old service → release device → start new service → health check → commit or restore old configuration. Persist failures and diagnostics.
+A serial port has one exclusive owner at a time. The adapter contract should support `validate`, `start`, `stop`, `status`, and capability/configuration discovery. Changing owner follows the activation contract below. Persist failures and diagnostics.
+
+### Activation
+
+Accepting a configuration and activating it are separate, and no API or interface may present one as the other:
+
+| Concept | Meaning |
+|---|---|
+| Desired configuration | The validated, durable revision the operator requested |
+| Active configuration | What the service controller has actually applied to the port |
+| Runtime status | Whether the owning service is stopped, starting, running, stopping, unhealthy, or failed, with a message |
+
+A change's reply reports that the desired configuration is stored, and lists the ports that aren't doing what it asks. M3 has no service controller, so every port is stopped with no active configuration, and a port assigned a mode is reported as stored but not active.
+
+The controller added with the adapters follows this contract:
+
+1. Validate the change and durably commit it as the desired configuration, so a crash mid-transition can be recovered.
+2. Reconcile only the ports whose desired and active configurations differ, one transition per port at a time.
+3. Stop the old owner and confirm the device is released before starting anything, so a port never has two owners.
+4. Start the new service, health-check it, and only then report it active.
+5. If activation fails, stop the new service, restart the previous active configuration, and commit a new revision by `museumd` restoring it, recording the failure and its diagnostics. If the previous configuration can't be restored either, leave the port stopped and report it failed.
+6. At startup, adopt services that already match the desired configuration, and reconcile the rest. Restarting `museumd` doesn't disturb a healthy port.
+
+Clients wait for the outcome of a transition, up to a timeout, and report failure with a nonzero exit.
 
 Serial configuration includes stable device identity, baud, framing/flow control as appropriate, mode-specific settings, and optional user-facing connected-machine label. Distinguish physical UART behavior from virtual PTY/TCP emulation; test real hardware before claiming parity.
 

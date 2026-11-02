@@ -41,13 +41,13 @@ enum Command {
 
 #[derive(Subcommand)]
 enum SerialCommand {
-    /// List ports and their configured modes
+    /// List ports, what they should do, and what they are doing
     List,
-    /// List the modes this gateway supports
+    /// List the modes this gateway accepts
     Adapters,
-    /// Change a port; settings you don't mention stay as they are
+    /// Store new settings for a port; settings you don't mention stay as they are
     Set(SetArgs),
-    /// Disable a port, keeping its line settings
+    /// Store a port as disabled, keeping its line settings
     Disable { port: String },
 }
 
@@ -132,27 +132,36 @@ fn change_line(change: &Change) -> String {
 
 fn print_ports(ports: &[PortView]) {
     println!(
-        "{:<8} {:<12} {:<7} {:<8} {:<8} {:<9} LABEL",
-        "PORT", "MODE", "BAUD", "FRAMING", "FLOW", "KIND"
+        "{:<8} {:<12} {:<12} {:<10} {:<7} {:<8} {:<8} {:<9} LABEL",
+        "PORT", "DESIRED", "ACTIVE", "STATE", "BAUD", "FRAMING", "FLOW", "KIND"
     );
-    for PortView {
-        name, kind, config, ..
-    } in ports
-    {
+    for port in ports {
         let PortConfig {
             mode,
             baud,
             framing,
             flow,
             label,
-        } = config;
-        let kind = serde_json::to_value(kind).expect("kinds serialize");
-        let kind = kind.as_str().unwrap_or_default();
-        let label = label.as_deref().unwrap_or("");
+        } = &port.desired;
+        let active = port.active.as_ref().map_or("none", |active| &active.mode);
+        let kind = serde_json::to_value(port.kind).expect("kinds serialize");
         println!(
-            "{name:<8} {mode:<12} {baud:<7} {framing:<8} {:<8} {kind:<9} {label}",
-            flow.to_string()
+            "{:<8} {mode:<12} {active:<12} {:<10} {baud:<7} {framing:<8} {:<8} {:<9} {}",
+            port.name,
+            port.state.to_string(),
+            flow.to_string(),
+            kind.as_str().unwrap_or_default(),
+            label.as_deref().unwrap_or(""),
         );
+    }
+    print_port_messages(ports);
+}
+
+fn print_port_messages(ports: &[PortView]) {
+    for port in ports {
+        if let Some(message) = &port.message {
+            println!("{}: {message}", port.name);
+        }
     }
 }
 
@@ -180,11 +189,13 @@ fn print_reply(reply: &Reply) {
                 println!("{:<12} {}", adapter.name, adapter.description);
             }
         }
-        Reply::Applied(applied) if applied.changed => {
-            println!("revision {}", applied.revision);
-        }
-        Reply::Applied(applied) => {
-            println!("unchanged, still revision {}", applied.revision);
+        Reply::Stored(stored) => {
+            if stored.changed {
+                println!("stored as revision {}", stored.revision);
+            } else {
+                println!("unchanged, still revision {}", stored.revision);
+            }
+            print_port_messages(&stored.pending);
         }
         Reply::Config(view) => {
             let text = serde_json::to_string_pretty(view).expect("views serialize");

@@ -104,7 +104,7 @@ fn mode(daemon: &Daemon, port: &str) -> String {
     match daemon.ask(Request::SerialList).unwrap().unwrap() {
         Reply::Ports { ports } => {
             let port = ports.into_iter().find(|p| p.name == port).unwrap();
-            port.config.mode
+            port.desired.mode
         }
         other => panic!("{other:?}"),
     }

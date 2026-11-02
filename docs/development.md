@@ -73,7 +73,7 @@ Your lab's addresses are in `~/.local/share/museum-net/lab/subnets.json`.
 
 ```sh
 museumctl status
-museumctl serial adapters                          # the modes this gateway supports
+museumctl serial adapters                          # the modes this gateway accepts
 museumctl serial list
 museumctl serial set com1 --mode slip --baud 38400
 museumctl serial disable com1                      # keeps its line settings
@@ -83,7 +83,7 @@ museumctl config rollback 2                        # records a new revision
 
 Add `--json` for the daemon's reply as JSON. `museumctl` exits 0 on success and 1 if the request failed or `config validate` found problems.
 
-Assigning a mode only stores and validates it for now. No adapter runs until the serial milestone, and `kind` shows whether a port is real hardware or virtual.
+`serial set` stores and validates a desired configuration; it doesn't activate anything. `DESIRED` is what you asked for, while `ACTIVE` and `STATE` are what the port is doing. No adapter runs until the serial milestone, so `ACTIVE` stays `none` and `museumctl` reports the port as stored but not active. `KIND` shows whether a port is real hardware or virtual.
 
 To read state a user needs the `museum` group. To change it they also need `museum-admin`, or to be root. Changes are recorded under their user name.
 

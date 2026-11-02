@@ -6,7 +6,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AdapterDescriptor, Config, PortConfig, Problem, SerialChange};
+use crate::config::{AdapterDescriptor, Config, DISABLED, PortConfig, Problem, SerialChange};
 use crate::inventory::PortKind;
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -60,7 +60,7 @@ pub enum Reply {
     Status(Status),
     Ports { ports: Vec<PortView> },
     Adapters { adapters: Vec<AdapterDescriptor> },
-    Applied(Applied),
+    Stored(Stored),
     Config(ConfigView),
     Validation { problems: Vec<Problem> },
     History { changes: Vec<Change> },
@@ -75,21 +75,68 @@ pub struct Status {
     pub problems: Vec<Problem>,
 }
 
-/// A port's configured state.
+/// A port as requested and as it actually is. These can differ, so a client
+/// must never present `desired` as what the port is doing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortView {
     pub name: String,
     pub device: String,
     pub kind: PortKind,
-    pub config: PortConfig,
+    /// The validated, durable configuration the operator requested.
+    pub desired: PortConfig,
+    /// What the service controller has applied. `None` means no service owns
+    /// the port.
+    pub active: Option<PortConfig>,
+    pub state: RuntimeState,
+    /// Why the port is not as desired, or what went wrong.
+    pub message: Option<String>,
 }
 
+impl PortView {
+    /// Whether the port is doing what was requested.
+    pub fn activated(&self) -> bool {
+        match &self.active {
+            Some(active) => *active == self.desired && self.state == RuntimeState::Running,
+            None => self.desired.mode == DISABLED,
+        }
+    }
+}
+
+/// The state of the service that owns a port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RuntimeState {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+    Unhealthy,
+    Failed,
+}
+
+impl fmt::Display for RuntimeState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            RuntimeState::Stopped => "stopped",
+            RuntimeState::Starting => "starting",
+            RuntimeState::Running => "running",
+            RuntimeState::Stopping => "stopping",
+            RuntimeState::Unhealthy => "unhealthy",
+            RuntimeState::Failed => "failed",
+        })
+    }
+}
+
+/// The outcome of a change: the desired configuration is durable. This says
+/// nothing about any service, which is what `pending` is for.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Applied {
+pub struct Stored {
     pub revision: u64,
-    /// False if the request matched the current configuration, so no revision
+    /// False if the request matched the desired configuration, so no revision
     /// was written.
     pub changed: bool,
+    /// Ports that are not doing what the desired configuration asks.
+    pub pending: Vec<PortView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,15 +221,49 @@ mod tests {
     #[test]
     fn replies_and_errors_survive_the_wire() {
         for response in [
-            Ok(Reply::Applied(Applied {
+            Ok(Reply::Stored(Stored {
                 revision: 2,
                 changed: true,
+                pending: Vec::new(),
             })),
             Err(ApiError::new(ErrorCode::Denied, "no")),
         ] {
             let text = serde_json::to_string(&response as &Response).unwrap();
             assert_eq!(serde_json::from_str::<Response>(&text).unwrap(), response);
         }
+    }
+
+    fn view(desired: PortConfig, active: Option<PortConfig>, state: RuntimeState) -> PortView {
+        PortView {
+            name: "com1".to_owned(),
+            device: "/dev/a".to_owned(),
+            kind: PortKind::Virtual,
+            desired,
+            active,
+            state,
+            message: None,
+        }
+    }
+
+    #[test]
+    fn a_stored_mode_is_not_an_activated_one() {
+        let slip = PortConfig {
+            mode: "slip".to_owned(),
+            ..Default::default()
+        };
+        let ppp = PortConfig {
+            mode: "ppp".to_owned(),
+            ..Default::default()
+        };
+        let stopped = RuntimeState::Stopped;
+        assert!(!view(slip.clone(), None, stopped).activated());
+        assert!(view(PortConfig::default(), None, stopped).activated());
+
+        let running = RuntimeState::Running;
+        assert!(view(slip.clone(), Some(slip.clone()), running).activated());
+        assert!(!view(slip.clone(), Some(ppp), running).activated());
+        let failed = RuntimeState::Failed;
+        assert!(!view(slip.clone(), Some(slip), failed).activated());
     }
 
     #[test]
