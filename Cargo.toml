@@ -6,3 +6,20 @@ members = ["crates/*"]
 version = "0.0.0"
 edition = "2024"
 publish = false
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+humantime = "2"
+museum-core = { path = "crates/museum-core" }
+nix = { version = "0.30", features = ["user"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# museumd holds the only copy of the live state, so a panic ends the process
+# and systemd restarts it from the last committed revision.
+[profile.release]
+panic = "abort"

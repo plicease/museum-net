@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live test of the real lab: boot, isolation, VPN, SSH, lifecycle, and removal.
+"""Live test of the real lab: boot, isolation, VPN, SSH, management, lifecycle, and removal.
 
 Needs KVM, libvirt, and Nix, so it is not part of the unit tests. It destroys
 the lab, including disks, when it finishes:
@@ -9,6 +9,7 @@ the lab, including disks, when it finishes:
 
 import base64
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -386,6 +387,181 @@ def test_guests():
     check(forwarding == "0", "gateway does not forward IPv6")
 
 
+def museumctl(*args, user="root"):
+    """Run museumctl in the gateway. Returns (exit status, output)."""
+    command = shlex.join(("museumctl", *args))
+    if user != "root":
+        command = f"runuser -u {user} -- {command}"
+    return guest(GATEWAY, f"{command} 2>&1")
+
+
+def museumctl_json(*args):
+    status, output = museumctl("--json", *args)
+    if status != 0:
+        raise RuntimeError(output)
+    return json.loads(output)
+
+
+def current_revision():
+    return museumctl_json("status")["current"]["revision"]
+
+
+def serial_port(name):
+    ports = museumctl_json("serial", "list")["ports"]
+    return next(port["config"] for port in ports if port["name"] == name)
+
+
+def test_management_service():
+    guest(GATEWAY, "systemctl is-active --wait museumd")
+    socket = guest(GATEWAY, "stat -c '%a %U %G %F' /run/museumd/museumd.sock")[1].strip()
+    check(socket == "660 root museum socket", "museumd socket is restricted to its group", socket)
+    state = guest(GATEWAY, "stat -c '%a %U' /var/lib/museumd")[1].strip()
+    check(state == "700 root", "museumd state is private", state)
+    listening = guest(
+        GATEWAY,
+        "nsenter -t $(systemctl show -p MainPID --value museumd) -n ip -o link show",
+    )[1]
+    check(
+        "lo:" in listening and "mgmt0" not in listening,
+        "museumd has no network interface",
+        listening,
+    )
+
+    adapters = {a["name"] for a in museumctl_json("serial", "adapters")["adapters"]}
+    check(
+        adapters == {"slip", "ppp", "sprocket", "interloper"},
+        "museumctl discovers adapters from the daemon",
+        str(adapters),
+    )
+    check(
+        serial_port("com1")["mode"] == "disabled" and current_revision() == 1,
+        "a new gateway starts with its ports disabled",
+    )
+
+    status, output = museumctl(
+        "serial", "set", "com2", "--mode", "sprocket", "--baud", "57600", user="museum-admin"
+    )
+    check(status == 0, "an admin can assign a port", output)
+    before = serial_port("com2")
+    status, output = museumctl(
+        "serial", "set", "com1", "--mode", "slip", "--baud", "38400",
+        "--label", "PS/2 Model 70", user="museum-admin",
+    )
+    check(status == 0, "an admin can assign the other port", output)
+    check(serial_port("com2") == before, "changing com1 leaves com2 alone")
+    assigned = serial_port("com1")
+    check(
+        (assigned["mode"], assigned["baud"], assigned["label"])
+        == ("slip", 38400, "PS/2 Model 70"),
+        "the assignment is stored",
+        str(assigned),
+    )
+
+
+def test_management_authorization():
+    status, output = museumctl("status", user="museum-viewer")
+    check(status == 0, "a museum group member can read", output)
+    revision = current_revision()
+    for args in (
+        ("serial", "set", "com1", "--mode", "ppp"),
+        ("serial", "disable", "com1"),
+        ("config", "rollback", "1"),
+    ):
+        status, output = museumctl(*args, user="museum-viewer")
+        check(status != 0 and "may not change" in output, f"a viewer can't: {args[1]}", output)
+    check(current_revision() == revision, "denied requests change nothing")
+
+    status, output = museumctl("status", user="nobody")
+    check(
+        status != 0 and "museum group" in output,
+        "a user outside the museum group can't connect",
+        output,
+    )
+
+
+def test_management_validation():
+    revision = current_revision()
+    before = serial_port("com1")
+    for args, expected in (
+        (("serial", "set", "com1", "--mode", "gopher"), "unknown mode"),
+        (("serial", "set", "com1", "--baud", "31337"), "unsupported baud"),
+        (("serial", "set", "com1", "--framing", "9Z9"), "invalid framing"),
+        (("serial", "set", "com9", "--mode", "slip"), "no serial port"),
+        (("config", "rollback", "999"), "no revision"),
+    ):
+        status, output = museumctl(*args)
+        check(status != 0 and expected in output, f"rejected: {expected}", output)
+    check(
+        current_revision() == revision and serial_port("com1") == before,
+        "rejected changes leave the configuration as it was",
+    )
+    check(museumctl("config", "validate")[0] == 0, "the stored configuration validates")
+
+
+def test_management_history():
+    changes = museumctl_json("config", "history")["changes"]
+    check(
+        changes[0]["actor"] == "museum-admin" and "com1" in changes[0]["action"],
+        "the change log names who changed what",
+        str(changes[0]),
+    )
+    revision = current_revision()
+    museumctl("serial", "disable", "com1")
+    check(serial_port("com1")["mode"] == "disabled", "a port can be disabled")
+    status, output = museumctl("config", "rollback", str(revision))
+    check(status == 0 and serial_port("com1")["mode"] == "slip", "rollback restores it", output)
+    newest = museumctl_json("config", "history")["changes"][0]
+    check(
+        newest["revision"] == revision + 2 and "roll back" in newest["action"],
+        "rollback is recorded as a new revision",
+        str(newest),
+    )
+
+
+def test_management_durability():
+    revision = current_revision()
+    main_pid = "systemctl show -p MainPID --value museumd"
+    killed = guest(GATEWAY, main_pid)[1].strip()
+    guest(GATEWAY, f"kill -KILL {killed}")
+    check(
+        wait_until(
+            lambda: guest(GATEWAY, main_pid)[1].strip() not in ("0", killed)
+            and museumctl("status")[0] == 0
+        ),
+        "museumd comes back after being killed",
+    )
+    check(current_revision() == revision, "a killed museumd keeps its configuration")
+
+    # guest-exec can't outlive the guest, so reboot from outside.
+    virsh("reboot", GATEWAY)
+    time.sleep(10)
+    wait_for_boot(GATEWAY)
+    guest(GATEWAY, "systemctl is-active --wait museumd")
+    check(
+        current_revision() == revision and serial_port("com1")["baud"] == 38400,
+        "the configuration survives a reboot",
+    )
+
+
+def test_management_without_network():
+    interfaces = ("mgmt0", "museum0", "museum1")
+    links = "; ".join(f"ip link set {name} down" for name in interfaces)
+    guest(GATEWAY, f"systemctl stop systemd-networkd.socket systemd-networkd openvpn-management; {links}")
+    state = guest(GATEWAY, "cat /sys/class/net/mgmt0/operstate")[1].strip()
+    check(state == "down", "the gateway's network is down", state)
+    status, output = museumctl("serial", "set", "com1", "--baud", "19200")
+    check(status == 0, "museumctl changes configuration with no network", output)
+    check(serial_port("com1")["baud"] == 19200, "the change applied with no network")
+
+    museumctl("serial", "set", "com1", "--baud", "38400")
+    up = "; ".join(f"ip link set {name} up" for name in interfaces)
+    guest(GATEWAY, f"{up}; systemctl start systemd-networkd openvpn-management")
+    check(
+        wait_until(lambda: tunnel_up(GATEWAY, vpn_addresses()[1]), 90),
+        "the VPN returns when the network does",
+    )
+
+
 def test_lifecycle(before):
     output = script("update", "--dry-run")
     check("Nothing to do" in output, "update --dry-run finds nothing to do", output)
@@ -442,6 +618,12 @@ def main():
     test_museum_isolation()
     test_credentials()
     test_reconnection()
+    test_management_service()
+    test_management_authorization()
+    test_management_validation()
+    test_management_history()
+    test_management_durability()
+    test_management_without_network()
     test_lifecycle(before)
     print(f"\n{len(failures)} failed")
     return 1 if failures else 0

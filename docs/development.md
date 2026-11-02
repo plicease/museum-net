@@ -67,6 +67,28 @@ Your lab's addresses are in `~/.local/share/museum-net/lab/subnets.json`.
 
 `up` generates a throwaway test CA and SSH keys in `~/.local/share/museum-net/lab/credentials/`. They persist between runs, and `destroy --disks` leaves them in place. Delete that directory and run `update` to replace them. Never use them outside the lab.
 
+## Management
+
+`dev-gateway` runs `museumd`, and `museumctl` talks to it over a Unix socket, so it works with every network interface down. From the gateway's console:
+
+```sh
+museumctl status
+museumctl serial adapters                          # the modes this gateway supports
+museumctl serial list
+museumctl serial set com1 --mode slip --baud 38400
+museumctl serial disable com1                      # keeps its line settings
+museumctl config history
+museumctl config rollback 2                        # records a new revision
+```
+
+Add `--json` for the daemon's reply as JSON. `museumctl` exits 0 on success and 1 if the request failed or `config validate` found problems.
+
+Assigning a mode only stores and validates it for now. No adapter runs until the serial milestone, and `kind` shows whether a port is real hardware or virtual.
+
+To read state a user needs the `museum` group. To change it they also need `museum-admin`, or to be root. Changes are recorded under their user name.
+
+Revisions are JSON files in `/var/lib/museumd`, and the service logs to `journalctl -u museumd`. `museumd` won't start if the newest revision is damaged or comes from a newer version; the log names the file. Move that file aside to go back to the previous revision.
+
 ## Nix
 
 Nix comes from Ubuntu's `nix-bin` and `nix-setup-systemd` packages, so no downloaded installer is involved. `flake.lock` pins nixpkgs. Flakes aren't enabled system-wide, so pass the feature flags on each call:
@@ -93,13 +115,16 @@ Copy `dev/config.example.toml` to `~/.config/museum-net/config.toml` to set loca
 # Unit tests, against a fake host
 PYTHONPATH=dev/lib python3 -m unittest discover -s tests/provisioning
 
+# The Rust crates, including the real daemon over a real socket
+cargo test --workspace
+
 # Full bootstrap in a clean Ubuntu container; needs Docker and changes nothing on the host
 tests/provisioning/clean-install.sh
 ```
 
 A container has no KVM or running libvirt, so `clean-install.sh` expects those two `doctor` checks to fail and starts `nix-daemon` by hand. Run `doctor` on a real host to cover them.
 
-To test the real lab, including isolation, the VPN, SSH, and its full lifecycle:
+To test the real lab, including isolation, the VPN, SSH, `museumd`, and its full lifecycle:
 
 ```sh
 tests/nixos/lab_live.py

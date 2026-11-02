@@ -35,6 +35,7 @@
         };
     in
     {
+      packages.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.callPackage ./package.nix { };
       nixosModules.gateway = import ./modules/gateway.nix;
       nixosConfigurations = lib.mapAttrs labHost machines;
     };

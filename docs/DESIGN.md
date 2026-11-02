@@ -225,9 +225,15 @@ The local CLI communicates through a Unix socket, so it works even with no Ether
 
 Use Unix permissions and explicit authorization for mutations. Do not run an unrestricted shell command constructed from web/CLI input. Keep a durable change log and provide rollback.
 
+The socket is `root:museum` mode 0660, so `museum` group membership decides who can read. Changes also need root or the `museum-admin` group, which `museumd` checks against the kernel-reported peer for each connection. Every front end calls the same operations, which know nothing about their transport, so the portal can't drift from the CLI.
+
+Each revision is a complete, schema-versioned snapshot in its own file, and the highest number is current. A revision is fully on disk before it takes its final name, so a crash leaves the previous one current. Revisions are never rewritten: a rollback is a new revision, and can itself be rolled back. A damaged or newer-schema current revision stops `museumd` from starting, because running on an older configuration would silently undo a change.
+
+A change is refused if it adds a problem, and existing problems don't block it. So when a port leaves the inventory, its stale entry is reported but other ports can still be changed.
+
 ### Configuration ownership
 
-- NixOS: packages, base firewall boundaries, service units/templates, stable interface identification, OpenVPN, management infrastructure.
+- NixOS: packages, base firewall boundaries, service units/templates, stable interface identification, serial port inventory, OpenVPN, management infrastructure.
 - `museumd`: validated runtime serial assignments, baud rates, logical zone mappings within allowed policies, enabled service instances, archive selection/status.
 - Changes must survive reboot, have schema versions, and be applied transactionally where possible.
 - Changing a serial mode should not require rebuilding NixOS; changing foundational security policy may require a NixOS deployment.
@@ -250,7 +256,7 @@ museumctl config history
 museumctl config rollback <revision>
 ```
 
-These are **design targets**, not implemented commands. `clap` is a good fit for nested subcommands and shell completions. Avoid a fixed enum of all possible future serial protocols: the CLI should discover supported adapter names from the daemon.
+M3 implements `status`, `serial`, and `config`, plus `serial adapters`, which lists the modes the daemon supports. `network`, `vpn`, and `archive` are design targets for the milestones that add their state. `clap` is a good fit for nested subcommands and shell completions. Avoid a fixed enum of all possible future serial protocols: the CLI should discover supported adapter names from the daemon.
 
 ## 8. Serial ports and protocol adapters
 
@@ -471,7 +477,7 @@ Phases can overlap, but M0–M3 should establish the reproducible and manageable
 | Archive size | Measure actual archive against 1 TB USB capacity, filesystem overhead, and update headroom |
 | Mirror update consistency | Design crash-safe incremental updates without requiring full duplicate storage |
 | Production VPN | Confirm `nullray` OpenVPN addressing, routes, PKI, and SSH authorization |
-| Management authentication | Choose local authorization and HTTPS/authentication approach for web management only |
+| Management authentication | Choose HTTPS and authentication for web management; local authorization is decided (§7) |
 | Archive HTTP/FTP | Choose packaged servers and validate vintage compatibility |
 | Serial hardware | Verify physical UART capabilities and handshaking on `twintwist`/`topspin` |
 
